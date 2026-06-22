@@ -2,7 +2,6 @@ import { MODES, MODE_LABELS, type Mode } from './modes'
 
 type Status = 'connecting' | 'listening' | 'error'
 
-let statusEl: HTMLDivElement
 let transcriptEl: HTMLDivElement
 let translationEl: HTMLDivElement
 let langChipEl: HTMLSpanElement
@@ -18,8 +17,7 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
       <header>
         <h1>Oneword</h1>
         <div class="head-right">
-          <span id="lang" class="chip chip-muted">idioma: —</span>
-          <div id="status" class="status status-connecting">Conectando…</div>
+          <span id="lang" class="chip chip-muted">auto → —</span>
         </div>
       </header>
       <section class="modes" role="radiogroup" aria-label="Modo">
@@ -40,7 +38,6 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
       <footer>Toca una vez la patilla de las gafas para cambiar de modo · doble toque para salir.</footer>
     </main>
   `
-  statusEl = app.querySelector<HTMLDivElement>('#status')!
   transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
   translationEl = app.querySelector<HTMLDivElement>('#translation')!
   langChipEl = app.querySelector<HTMLSpanElement>('#lang')!
@@ -62,15 +59,25 @@ export function setActiveMode(mode: Mode) {
   }
 }
 
+// The single header chip shows the detected language ("auto → es"). Errors are
+// the only status that takes it over (red), so connection/mic problems stay
+// visible; normal states (connecting/listening) leave the language showing.
 export function setStatus(kind: Status, text: string) {
-  if (!statusEl) return
-  statusEl.className = `status status-${kind}`
-  statusEl.textContent = text
+  if (!langChipEl) return
+  if (kind === 'error') {
+    langChipEl.className = 'chip chip-error'
+    langChipEl.textContent = text
+  } else {
+    langChipEl.classList.remove('chip-error')
+    langChipEl.classList.add('chip-muted')
+  }
 }
 
 export function setDetectedLanguage(lang: string) {
   if (!langChipEl) return
-  langChipEl.textContent = `idioma: ${lang}`
+  langChipEl.classList.remove('chip-error')
+  langChipEl.classList.add('chip-muted')
+  langChipEl.textContent = `auto → ${lang}`
 }
 
 export function setTranscript(text: string) {
@@ -97,11 +104,7 @@ function injectStyles() {
     .chip { font-size: 11px; padding: 4px 9px; border-radius: 999px;
       border: 1px solid #3E3E3E; color: #A7A7A7; letter-spacing: 0.04em; text-transform: uppercase; }
     .chip-muted { background: #2E2E2E; }
-    .status { font-size: 12px; padding: 4px 10px; border-radius: 999px;
-      border: 1px solid transparent; letter-spacing: 0.04em; text-transform: uppercase; }
-    .status-connecting { color: #A7A7A7; border-color: #3E3E3E; }
-    .status-listening  { color: #3CFA44; border-color: #3CFA44; background: rgba(60,250,68,0.08); }
-    .status-error      { color: #FF453A; border-color: #FF453A; background: rgba(255,69,58,0.08); }
+    .chip-error { background: rgba(255,69,58,0.12); border-color: #FF453A; color: #FF453A; text-transform: none; }
     .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
     .mode-btn { appearance: none; cursor: pointer; padding: 12px 10px;
       background: #2E2E2E; color: #E5E5E5; border: 1px solid #3E3E3E;

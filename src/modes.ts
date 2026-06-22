@@ -8,8 +8,8 @@ export type Mode = 'translate' | 'transcribe'
 export const MODES: Mode[] = ['translate', 'transcribe']
 
 export const MODE_LABELS: Record<Mode, string> = {
-  translate: 'Traducción · frase',
-  transcribe: 'Transcripción · frase',
+  translate: 'traducción · frase',
+  transcribe: 'transcripción · frase',
 }
 
 // Short uppercase labels shown briefly on the glasses when the mode cycles.
