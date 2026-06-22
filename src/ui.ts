@@ -102,7 +102,7 @@ function injectStyles() {
     .status-connecting { color: #A7A7A7; border-color: #3E3E3E; }
     .status-listening  { color: #3CFA44; border-color: #3CFA44; background: rgba(60,250,68,0.08); }
     .status-error      { color: #FF453A; border-color: #FF453A; background: rgba(255,69,58,0.08); }
-    .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
     .mode-btn { appearance: none; cursor: pointer; padding: 12px 10px;
       background: #2E2E2E; color: #E5E5E5; border: 1px solid #3E3E3E;
       border-radius: 10px; font-size: 13px; font-weight: 500; text-align: center;

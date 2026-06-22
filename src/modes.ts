@@ -1,21 +1,21 @@
-// The 3 user-facing modes. Selected on the phone, cycled with single-tap
-// on the glasses. Order matters: tap cycles through MODES in this order.
+// The 2 user-facing modes. Selected on the phone, cycled with single-tap on
+// the glasses. Both operate at the SENTENCE level: the display is written once
+// per utterance, AFTER the speaker pauses — writing mid-speech starves the BLE
+// link (the mic audio uplink saturates it) and freezes the display.
 
-export type Mode = 'translate-word' | 'transcribe-word' | 'translate-sentence'
+export type Mode = 'translate' | 'transcribe'
 
-export const MODES: Mode[] = ['translate-word', 'transcribe-word', 'translate-sentence']
+export const MODES: Mode[] = ['translate', 'transcribe']
 
 export const MODE_LABELS: Record<Mode, string> = {
-  'translate-word': 'Traducción · palabra',
-  'transcribe-word': 'Transcripción · palabra',
-  'translate-sentence': 'Traducción · frase',
+  translate: 'Traducción · frase',
+  transcribe: 'Transcripción · frase',
 }
 
 // Short uppercase labels shown briefly on the glasses when the mode cycles.
 export const MODE_GLASSES_LABELS: Record<Mode, string> = {
-  'translate-word': 'TRADUCCIÓN · PALABRA',
-  'transcribe-word': 'TRANSCRIPCIÓN · PALABRA',
-  'translate-sentence': 'TRADUCCIÓN · FRASE',
+  translate: 'TRADUCCIÓN',
+  transcribe: 'TRANSCRIPCIÓN',
 }
 
 export function nextMode(current: Mode): Mode {
@@ -24,5 +24,5 @@ export function nextMode(current: Mode): Mode {
 }
 
 export function isTranslationMode(mode: Mode): boolean {
-  return mode === 'translate-word' || mode === 'translate-sentence'
+  return mode === 'translate'
 }

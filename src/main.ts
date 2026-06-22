@@ -24,17 +24,14 @@ import {
 } from './ui'
 
 const TARGET_LANG = 'es'
-const WORD_DRIP_MS = 350           // pace at which translated words appear in mode 1
 const MODE_BANNER_MS = 900         // how long the mode label flashes on the glasses when cycling
 const MODE_STORAGE_KEY = 'oneword:mode'
 
 const DEEPGRAM_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY as string
 const GOOGLE_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string
 
-let currentMode: Mode = 'translate-word'
+let currentMode: Mode = 'translate'
 let modeBannerTimer: number | null = null
-let wordDripTimer: number | null = null
-let dripQueue: string[] = []
 
 const bridge = await waitForEvenAppBridge()
 
@@ -82,29 +79,6 @@ if (created !== 0) {
 
 const glasses = new GlassesStage(bridge)
 
-// ─── TEMP DIAGNOSTIC — pipeline tracer (driven by REAL speech) ─────────
-// Shows "U# T# D#" on the glasses: utterances received / translations done /
-// drip words. SPEAK and read which counter stalls:
-//   • U stuck       → Deepgram isn't delivering utterances
-//   • U up, T stuck → translate() hangs/fails
-//   • T up, D stuck → drip stops feeding
-//   • all climb     → pipeline healthy → freeze is CONTENT-specific (accents/length)
-// While DIAG_TRACE is on, the real word/sentence content is NOT drawn — the
-// tracer owns the display. Remove after.
-const DIAG_TRACE = true
-let trU = 0, trT = 0, trD = 0
-function trace() {
-  if (!DIAG_TRACE) return
-  // Phone status bar = BLE-free readout. If THIS keeps climbing while the
-  // glasses freeze, the pipeline is alive and the BLE write path is dead.
-  // gw = glasses writes started/ok/timedout/err.
-  setStatus(
-    'listening',
-    `U${trU} T${trT} D${trD} dq${dripQueue.length} | gw ${glasses.writesStarted}/${glasses.writesOk}/${glasses.writesTimedOut}/${glasses.writesErr}`,
-  )
-  glasses.setCenteredSentence(`U${trU} T${trT} D${trD}`)
-}
-
 // Show the mode label briefly when the app starts, then settle.
 flashModeBanner(currentMode)
 
@@ -137,16 +111,14 @@ if (stt) {
 }
 
 // ─── Mode routing ─────────────────────────────────────────────────────
+// Both modes write the glasses once per utterance — after the speaker pauses.
+// Writing mid-speech starves the BLE link (mic audio uplink saturates it) and
+// freezes the display, so per-word streaming is intentionally NOT done.
 
 function handleLatestWord(word: string) {
-  // Mirror in the companion UI regardless of mode so the phone always shows
-  // what's being heard.
-  console.log(`[diag] onLatestWord="${word}" mode=${currentMode}`) // TEMP diagnostic — remove after mode-2 test
+  // Live mirror on the phone only — the in-progress word as it's heard.
+  // The glasses are written per-sentence (on pause), never per-word.
   setTranscript(word)
-  if (currentMode === 'transcribe-word') {
-    // Real-time, word-by-word transcription on the glasses.
-    glasses.setCenteredWord(word)
-  }
 }
 
 let pendingUtteranceId = 0
@@ -154,14 +126,15 @@ async function handleUtterance(transcript: string, detectedLang: string) {
   setDetectedLanguage(detectedLang)
   setTranscript(transcript)
 
-  // For transcribe-word, an utterance boundary doesn't drive the display —
-  // the trailing word already does. Just bump the companion UI mirror.
-  if (currentMode === 'transcribe-word') return
+  // Transcribe: show the spoken phrase verbatim, in its original language.
+  if (currentMode === 'transcribe') {
+    glasses.setCenteredSentence(transcript)
+    return
+  }
 
-  trU++; trace() // DIAG — utterance reached a translation mode
-
-  // Translation modes: invalidate any earlier in-flight translation so a
-  // slow request doesn't clobber a newer utterance.
+  // Translate: render the Spanish translation of the full phrase. Invalidate
+  // any earlier in-flight translation so a slow request doesn't clobber a
+  // newer utterance.
   const myId = ++pendingUtteranceId
   let translated: string
   try {
@@ -171,41 +144,10 @@ async function handleUtterance(transcript: string, detectedLang: string) {
     console.error('Translate failed:', err)
     return
   }
-  trT++; trace() // DIAG — translate() resolved
   if (myId !== pendingUtteranceId) return // a newer utterance superseded this one
 
   setTranslation(translated)
-
-  if (currentMode === 'translate-sentence') {
-    if (!DIAG_TRACE) glasses.setCenteredSentence(translated)
-  } else if (currentMode === 'translate-word') {
-    enqueueWordDrip(translated)
-  }
-}
-
-function enqueueWordDrip(translated: string) {
-  const words = translated.split(/\s+/).filter(Boolean)
-  // Append to the queue rather than replace — if utterances come fast,
-  // we drain through all of them in order.
-  dripQueue.push(...words)
-  if (wordDripTimer === null) drainDripQueue()
-}
-
-function drainDripQueue() {
-  if (currentMode !== 'translate-word') {
-    dripQueue = []
-    wordDripTimer = null
-    return
-  }
-  const next = dripQueue.shift()
-  if (next === undefined) {
-    wordDripTimer = null
-    return
-  }
-  trD++ // DIAG — a word was dripped
-  if (DIAG_TRACE) trace()
-  else glasses.setCenteredWord(next)
-  wordDripTimer = window.setTimeout(drainDripQueue, WORD_DRIP_MS)
+  glasses.setCenteredSentence(translated)
 }
 
 // ─── Mode switching (phone + glasses tap) ─────────────────────────────
@@ -215,12 +157,6 @@ function switchMode(next: Mode, source: 'phone' | 'glasses') {
   currentMode = next
   setActiveMode(next)
   bridge.setLocalStorage(MODE_STORAGE_KEY, next).catch(() => {})
-  // Drop any in-flight word drip — it's from the previous mode.
-  dripQueue = []
-  if (wordDripTimer !== null) {
-    clearTimeout(wordDripTimer)
-    wordDripTimer = null
-  }
   // Invalidate any pending translation so it doesn't render under the new mode.
   pendingUtteranceId++
 
@@ -274,7 +210,6 @@ let cleanedUp = false
 function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
-  if (wordDripTimer !== null) clearTimeout(wordDripTimer)
   if (modeBannerTimer !== null) clearTimeout(modeBannerTimer)
   bridge.audioControl(false)
   stt?.close()

@@ -4,13 +4,14 @@ Contexto para Claude Code. Esta app vive en `/Users/juanf/oneword/`. Usuario: ju
 
 ## Qué es
 
-App de traducción para **gafas Even Realities G2** que escucha por el micrófono de las gafas y muestra texto **en MAYÚSCULAS** en pantalla. Tiene 3 modos configurables tanto desde la UI del teléfono como con un single-tap en la patilla de las gafas:
+App de traducción para **gafas Even Realities G2** que escucha por el micrófono de las gafas y muestra texto **en MAYÚSCULAS** en pantalla. Tiene **2 modos** configurables tanto desde la UI del teléfono como con un single-tap en la patilla de las gafas. **Ambos operan a nivel FRASE**: el display se escribe **una vez por utterance, después de que el hablante pausa**:
 
-1. **`translate-word`** — Auto-detect → ES. Drip de palabra-a-palabra (350 ms/palabra), centrada y grande. Default al iniciar.
-2. **`transcribe-word`** — Auto-detect (sin traducir). Palabra-a-palabra al ritmo natural del habla, centrada y grande.
-3. **`translate-sentence`** — Auto-detect → ES. Frase completa centrada (wrap-line si no cabe), reemplaza al llegar la siguiente.
+1. **`translate`** — Auto-detect → ES. Frase completa traducida, centrada (wrap-line si no cabe), reemplaza al llegar la siguiente. Default al iniciar.
+2. **`transcribe`** — Auto-detect (sin traducir). Frase completa en el idioma original, centrada.
 
-Single-tap = cicla 1→2→3→1 (muestra el nombre del modo en pantalla 900 ms). Double-tap = salir con diálogo. Modo activo persiste vía `bridge.setLocalStorage`.
+Single-tap = cicla 1→2→1 (muestra el nombre del modo en pantalla 900 ms). Double-tap = salir con diálogo. Modo activo persiste vía `bridge.setLocalStorage`.
+
+> **Por qué solo frases (no palabra-a-palabra):** los modos `*-word` originales (drip de 350 ms) **congelaban el display en hardware real**. Causa raíz confirmada (2026-06-22): el audio del mic sube por el mismo enlace **BLE** que las escrituras al display; escribir *mientras* se habla satura el BLE y cuelga las escrituras. Escribir **al pausar** (fin de utterance, cuando el audio baja) lo resuelve. Ver detalle en la sección de bug resuelto abajo.
 
 ## Stack
 
@@ -92,25 +93,23 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 
 ## Estado pendiente / TODO al retomar
 
-### 🔴 BUG ABIERTO — render en gafas reales (modos 1 y 2) — PRÓXIMO A RESOLVER (2026-06-19)
+### ✅ BUG RESUELTO (2026-06-22) — freeze del display por contención BLE audio↔display
 
-**Síntoma:** en las **gafas físicas** (no en el simulador), **los TRES modos** muestran **solo UNA palabra** y se **congelan** — esa palabra **no cambia nunca** aunque se sigan escuchando frases. Confirmado con el usuario que el **modo 3 (translate-sentence) también se congela** igual. El **simulador del Mac muestra los 3 modos perfecto** — son instancias independientes (simulador = render instantáneo; gafas = escritura por **Bluetooth LE**, lento).
+**Síntoma original:** en gafas físicas (no en el simulador) el display se **congelaba** mostrando solo la primera palabra/frase, aunque se siguieran escuchando frases.
 
-**Diagnóstico ACTUALIZADO (2026-06-22) — NO es el deadlock de `inflight`; es congestión BLE audio↔display al hablar:** el fix del `Promise.race([textContainerUpgrade, timeout(2000ms)])` **ya está aplicado** en `glasses-render.ts` y es correcto (libera `inflight`), pero **el freeze persiste**. Bisección hecha en hardware real con instrumentación:
-- **Heartbeat** escribiendo cada 1000ms y luego cada **300ms** (en silencio, sin hablar) → **fluye perfecto** en las gafas. ⇒ el BLE **sí aguanta** ese ritmo de escritura cuando no hay audio subiendo.
-- **Con habla real** → las gafas se congelan en el **primer write** (`U1 T1 D2`), pero el **tracer en la UI del teléfono (DOM, sin BLE) sigue avanzando** los contadores `U/T/D`. ⇒ el pipeline STT→traducir→drip está **vivo**; lo que muere es **la escritura BLE a las gafas**, y solo **cuando el mic está subiendo audio a la vez** (`audioControl(true)` + Deepgram activos).
-- **Hipótesis primaria a probar:** contención del enlace BLE entre el **audio uplink** (mic de las gafas → `bridge.audioControl`) y el **display downlink** (`textContainerUpgrade`). El simulador no tiene BLE real → nunca se congela. El timeout de 2s no basta porque **cada** write subsiguiente vuelve a colgarse mientras el audio compite.
+**Causa raíz confirmada (bisección en hardware con instrumentación):** el audio del mic **sube por el mismo enlace BLE** que las escrituras al display (`textContainerUpgrade`). Escribir el display **mientras se habla** satura el BLE y **cuelga las escrituras**. Evidencia:
+- Heartbeat escribiendo cada 300ms **en silencio** → fluye perfecto (el BLE aguanta el ritmo si no hay audio subiendo).
+- Con habla real → gafas congeladas en el primer write, pero el tracer en la UI del teléfono (DOM, sin BLE) seguía avanzando ⇒ el pipeline vive; muere la escritura BLE, y solo con `audioControl(true)` activo.
+- Confirmado por contraste de modos: el modo **frase** (1 write tras la pausa, cuando el audio baja) **fluye**; el modo **palabra-a-palabra** (drip de 350 ms, escribe durante el habla) **se congela**.
+- Apoyo externo: el BLE de las G2 es de banda muy baja (≈4 FPS para imagen 50×50px, [zenn.dev/bigdra](https://zenn.dev/bigdra/articles/eveng2-sdk-features?locale=en)).
 
-**Instrumentación de diagnóstico DEJADA EN EL CÓDIGO (quitar antes de empaquetar):**
-- `src/main.ts`: bandera `DIAG_TRACE = true` → un `trace()` que NO dibuja el contenido real; en su lugar vuelca `U# T# D# dq# | gw a/b/c/d` en el **chip de estado del teléfono** y en las gafas. `gw` = contadores de `GlassesStage`: escrituras **iniciadas/ok/timeout/error**.
-- `src/glasses-render.ts`: contadores públicos `writesStarted/writesOk/writesTimedOut/writesErr`.
-- Para volver al render real: poner `DIAG_TRACE = false` (o borrar el bloque tracer + los contadores).
+**Fix aplicado:** rediseño a **2 modos, ambos a nivel frase** — se escribe el display **una sola vez por utterance, al final** (cuando el hablante pausa). Eliminados los modos `*-word` y todo el word-drip (`enqueueWordDrip`/`drainDripQueue`/`WORD_DRIP_MS`). El `Promise.race([textContainerUpgrade, timeout(2000ms)])` en `glasses-render.ts` se mantiene como red de seguridad (libera `inflight` si un write se cuelga). Instrumentación de diagnóstico (`DIAG_TRACE`, contadores `gw`) **ya removida**. **Validado en hardware: los 2 modos fluyen sin congelarse.**
 
-**Próximos pasos al retomar:** (1) leer en el teléfono el contador `gw` durante el freeze: si **timeout (3er nº) sube** ⇒ los writes se cuelgan (confirma contención); si **ok == iniciadas** pero gafas congeladas ⇒ los writes tienen ACK pero el firmware no repinta. (2) Probar mitigaciones de contención: pausar/espaciar `audioControl` durante el write, throttlear writes a ~1/s mostrando solo la última palabra, o serializar para no tener audio-up + display-down simultáneos. (3) Si es límite del firmware/SDK, consultar el `everything-evenhub:sdk-reference` por rate limits de `textContainerUpgrade` concurrente con captura de audio.
+**Roadmap restante:** (1) ajustes de UI del teléfono; (2) eventualmente renombrar el proyecto a `onephrase` (o similar) — hoy sigue como `oneword`; (3) camino al `.ehpk` privado (ver más abajo).
 
 **⚠️ GOTCHA CONFIRMADO (2026-06-22) — el HMR NO llega al WebView del teléfono:** guardar el archivo recarga el **simulador** pero **NO las gafas/teléfono**. Tras **cada** cambio de código hay que **re-escanear el QR** para cargar el bundle nuevo (un freeze "que no se arregla con el fix" suele ser código viejo cacheado). Esto contradice la nota previa de "hot-reload en gafas" — no es confiable.
 
-**Cómo retomar (sesión cerrada 2026-06-22, dev server quizá detenido):** (1) `cd /Users/juanf/oneword && npm run dev`; (2) `npx evenhub qr --url http://$(ipconfig getifaddr en0):5173` **desde la carpeta del proyecto**; (3) Even Hub tab → Scan QR (Developer Mode ya activo); (4) **re-escanear el QR tras cada edición** (el HMR no basta); (5) la instrumentación `DIAG_TRACE` ya está puesta para leer los contadores en el teléfono.
+**Cómo retomar (dev server quizá detenido):** (1) `cd /Users/juanf/oneword && npm run dev`; (2) `npx evenhub qr --url http://$(ipconfig getifaddr en0):5173` **desde la carpeta del proyecto**; (3) Even Hub tab → Scan QR (Developer Mode ya activo); (4) **re-escanear el QR tras cada edición** (el HMR no basta).
 
 ### ⚙️ GOTCHA — activar Developer Mode para sideload (resuelto 2026-06-19, no obvio)
 

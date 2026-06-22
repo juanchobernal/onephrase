@@ -111,12 +111,6 @@ export class GlassesStage {
   private timer: number | null = null
   private inflight = false
 
-  // DIAG counters — surfaced on the phone UI to see if BLE writes stall/timeout.
-  writesStarted = 0
-  writesOk = 0
-  writesTimedOut = 0
-  writesErr = 0
-
   constructor(bridge: EvenAppBridge) {
     this.bridge = bridge
   }
@@ -156,7 +150,6 @@ export class GlassesStage {
     if (next === this.lastWritten) return
     this.lastWritten = next
     this.inflight = true
-    this.writesStarted++
     try {
       const result = await Promise.race([
         this.bridge.textContainerUpgrade(
@@ -172,14 +165,10 @@ export class GlassesStage {
         // The write may never have reached the glasses. Drop the dedupe
         // marker so the same content can be re-sent on the next flush.
         console.warn('textContainerUpgrade timed out, releasing lock')
-        this.writesTimedOut++
         this.lastWritten = ''
-      } else {
-        this.writesOk++
       }
     } catch (err) {
       console.error('textContainerUpgrade failed', err)
-      this.writesErr++
       this.lastWritten = ''
     } finally {
       this.inflight = false
