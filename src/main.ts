@@ -82,6 +82,29 @@ if (created !== 0) {
 
 const glasses = new GlassesStage(bridge)
 
+// ─── TEMP DIAGNOSTIC — pipeline tracer (driven by REAL speech) ─────────
+// Shows "U# T# D#" on the glasses: utterances received / translations done /
+// drip words. SPEAK and read which counter stalls:
+//   • U stuck       → Deepgram isn't delivering utterances
+//   • U up, T stuck → translate() hangs/fails
+//   • T up, D stuck → drip stops feeding
+//   • all climb     → pipeline healthy → freeze is CONTENT-specific (accents/length)
+// While DIAG_TRACE is on, the real word/sentence content is NOT drawn — the
+// tracer owns the display. Remove after.
+const DIAG_TRACE = true
+let trU = 0, trT = 0, trD = 0
+function trace() {
+  if (!DIAG_TRACE) return
+  // Phone status bar = BLE-free readout. If THIS keeps climbing while the
+  // glasses freeze, the pipeline is alive and the BLE write path is dead.
+  // gw = glasses writes started/ok/timedout/err.
+  setStatus(
+    'listening',
+    `U${trU} T${trT} D${trD} dq${dripQueue.length} | gw ${glasses.writesStarted}/${glasses.writesOk}/${glasses.writesTimedOut}/${glasses.writesErr}`,
+  )
+  glasses.setCenteredSentence(`U${trU} T${trT} D${trD}`)
+}
+
 // Show the mode label briefly when the app starts, then settle.
 flashModeBanner(currentMode)
 
@@ -135,6 +158,8 @@ async function handleUtterance(transcript: string, detectedLang: string) {
   // the trailing word already does. Just bump the companion UI mirror.
   if (currentMode === 'transcribe-word') return
 
+  trU++; trace() // DIAG — utterance reached a translation mode
+
   // Translation modes: invalidate any earlier in-flight translation so a
   // slow request doesn't clobber a newer utterance.
   const myId = ++pendingUtteranceId
@@ -146,12 +171,13 @@ async function handleUtterance(transcript: string, detectedLang: string) {
     console.error('Translate failed:', err)
     return
   }
+  trT++; trace() // DIAG — translate() resolved
   if (myId !== pendingUtteranceId) return // a newer utterance superseded this one
 
   setTranslation(translated)
 
   if (currentMode === 'translate-sentence') {
-    glasses.setCenteredSentence(translated)
+    if (!DIAG_TRACE) glasses.setCenteredSentence(translated)
   } else if (currentMode === 'translate-word') {
     enqueueWordDrip(translated)
   }
@@ -176,7 +202,9 @@ function drainDripQueue() {
     wordDripTimer = null
     return
   }
-  glasses.setCenteredWord(next)
+  trD++ // DIAG — a word was dripped
+  if (DIAG_TRACE) trace()
+  else glasses.setCenteredWord(next)
   wordDripTimer = window.setTimeout(drainDripQueue, WORD_DRIP_MS)
 }
 

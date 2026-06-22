@@ -90,12 +90,32 @@ function greedyWrap(text: string, maxW: number): string[] {
 // collapse to one BLE write — important so we don't congest the queue.
 const DEBOUNCE_MS = 120
 
+// Hard cap for a single BLE write. On real glasses, textContainerUpgrade()
+// can hang forever if the write never gets ACKed — without this the
+// `inflight` lock would stay true and freeze ALL future renders. Racing
+// against this timeout guarantees the lock is always released.
+const WRITE_TIMEOUT_MS = 2000
+
+const WRITE_TIMED_OUT = Symbol('write-timeout')
+
+function timeout(ms: number): Promise<typeof WRITE_TIMED_OUT> {
+  return new Promise((resolve) =>
+    window.setTimeout(() => resolve(WRITE_TIMED_OUT), ms),
+  )
+}
+
 export class GlassesStage {
   private bridge: EvenAppBridge
   private pendingContent: string | null = null
   private lastWritten = ''
   private timer: number | null = null
   private inflight = false
+
+  // DIAG counters — surfaced on the phone UI to see if BLE writes stall/timeout.
+  writesStarted = 0
+  writesOk = 0
+  writesTimedOut = 0
+  writesErr = 0
 
   constructor(bridge: EvenAppBridge) {
     this.bridge = bridge
@@ -136,16 +156,31 @@ export class GlassesStage {
     if (next === this.lastWritten) return
     this.lastWritten = next
     this.inflight = true
+    this.writesStarted++
     try {
-      await this.bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: CONTAINER_ID,
-          containerName: CONTAINER_NAME,
-          content: next,
-        }),
-      )
+      const result = await Promise.race([
+        this.bridge.textContainerUpgrade(
+          new TextContainerUpgrade({
+            containerID: CONTAINER_ID,
+            containerName: CONTAINER_NAME,
+            content: next,
+          }),
+        ),
+        timeout(WRITE_TIMEOUT_MS),
+      ])
+      if (result === WRITE_TIMED_OUT) {
+        // The write may never have reached the glasses. Drop the dedupe
+        // marker so the same content can be re-sent on the next flush.
+        console.warn('textContainerUpgrade timed out, releasing lock')
+        this.writesTimedOut++
+        this.lastWritten = ''
+      } else {
+        this.writesOk++
+      }
     } catch (err) {
       console.error('textContainerUpgrade failed', err)
+      this.writesErr++
+      this.lastWritten = ''
     } finally {
       this.inflight = false
       if (this.pendingContent !== null) this.schedule()
