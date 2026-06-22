@@ -1,6 +1,6 @@
-# CLAUDE.md — Oneword
+# CLAUDE.md — Onephrase
 
-Contexto para Claude Code. Esta app vive en `/Users/juanf/oneword/`. Usuario: juanchobernal@gmail.com (español, también dueño del proyecto Fredy en `/Users/juanf/`).
+Contexto para Claude Code. Esta app vive en `/Users/juanf/onephrase/`. Usuario: juanchobernal@gmail.com (español, también dueño del proyecto Fredy en `/Users/juanf/`).
 
 ## Qué es
 
@@ -23,18 +23,18 @@ Single-tap = cicla 1→2→1 (muestra el nombre del modo en pantalla 900 ms). Do
 ## Arquitectura de archivos
 
 ```
-oneword/
-├── app.json                 # package_id=com.example.oneword, permisos g2-microphone + network (whitelist deepgram + googleapis)
+onephrase/
+├── app.json                 # package_id=com.example.onephrase, permisos g2-microphone + network (whitelist deepgram + googleapis)
 ├── .env.example             # template (committed)
 ├── .env.local               # llaves reales (gitignored, NO commitear)
-├── index.html               # title=Oneword
+├── index.html               # title=Onephrase
 ├── src/
 │   ├── main.ts              # bridge init, mode state, ruteo STT→traducir→render, manejo de eventos
 │   ├── modes.ts             # tipo Mode, lista MODES[], labels (HTML + glasses uppercase), nextMode(), isTranslationMode()
 │   ├── glasses-render.ts    # GlassesStage (debounced textContainerUpgrade), formatCenteredWord/Sentence, espaciado + newlines para centrar
-│   ├── ui.ts                # UI del teléfono: selector 3 modos, chip idioma, chip status, boards transcripción/traducción
+│   ├── ui.ts                # UI del teléfono: selector 2 modos, chip idioma (auto→lang, rojo en error), boards transcripción/traducción
 │   └── asr/
-│       ├── stt.ts           # Cliente Deepgram WS, emite onLatestWord (modo 2) + onUtterance (modos 1, 3)
+│       ├── stt.ts           # Cliente Deepgram WS, emite onLatestWord (mirror en teléfono) + onUtterance (dispara ambos modos)
 │       └── translate.ts     # Google Translate v2 con cache in-memory
 ```
 
@@ -42,10 +42,10 @@ oneword/
 
 ```bash
 # Dev server (mantén corriendo)
-cd /Users/juanf/oneword && npm run dev   # http://localhost:5173
+cd /Users/juanf/onephrase && npm run dev   # http://localhost:5173
 
 # Simulador desktop
-cd /Users/juanf/oneword && npm run simulate
+cd /Users/juanf/onephrase && npm run simulate
 
 # Simulador con automation API en puerto 9898 (para screenshots + inputs por curl)
 node node_modules/@evenrealities/evenhub-simulator/bin/index.js http://localhost:5173 --automation-port 9898 &
@@ -105,11 +105,11 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 
 **Fix aplicado:** rediseño a **2 modos, ambos a nivel frase** — se escribe el display **una sola vez por utterance, al final** (cuando el hablante pausa). Eliminados los modos `*-word` y todo el word-drip (`enqueueWordDrip`/`drainDripQueue`/`WORD_DRIP_MS`). El `Promise.race([textContainerUpgrade, timeout(2000ms)])` en `glasses-render.ts` se mantiene como red de seguridad (libera `inflight` si un write se cuelga). Instrumentación de diagnóstico (`DIAG_TRACE`, contadores `gw`) **ya removida**. **Validado en hardware: los 2 modos fluyen sin congelarse.**
 
-**Roadmap restante:** (1) ajustes de UI del teléfono; (2) eventualmente renombrar el proyecto a `onephrase` (o similar) — hoy sigue como `oneword`; (3) camino al `.ehpk` privado (ver más abajo).
+**Roadmap restante:** (1) más ajustes de UI del teléfono; (2) camino al `.ehpk` privado (ver más abajo). Rename `oneword`→`onephrase`: ✅ hecho 2026-06-22 (carpeta, package.json, app.json `name`+`package_id`, index/h1, `MODE_STORAGE_KEY=onephrase:mode`, repo GitHub).
 
 **⚠️ GOTCHA CONFIRMADO (2026-06-22) — el HMR NO llega al WebView del teléfono:** guardar el archivo recarga el **simulador** pero **NO las gafas/teléfono**. Tras **cada** cambio de código hay que **re-escanear el QR** para cargar el bundle nuevo (un freeze "que no se arregla con el fix" suele ser código viejo cacheado). Esto contradice la nota previa de "hot-reload en gafas" — no es confiable.
 
-**Cómo retomar (dev server quizá detenido):** (1) `cd /Users/juanf/oneword && npm run dev`; (2) `npx evenhub qr --url http://$(ipconfig getifaddr en0):5173` **desde la carpeta del proyecto**; (3) Even Hub tab → Scan QR (Developer Mode ya activo); (4) **re-escanear el QR tras cada edición** (el HMR no basta).
+**Cómo retomar (dev server quizá detenido):** (1) `cd /Users/juanf/onephrase && npm run dev`; (2) `npx evenhub qr --url http://$(ipconfig getifaddr en0):5173` **desde la carpeta del proyecto**; (3) Even Hub tab → Scan QR (Developer Mode ya activo); (4) **re-escanear el QR tras cada edición** (el HMR no basta).
 
 ### ⚙️ GOTCHA — activar Developer Mode para sideload (resuelto 2026-06-19, no obvio)
 
@@ -118,10 +118,10 @@ El "Developer Center" / "Scan QR" **NO aparece en la app iOS** hasta activar Dev
 **Camino al `.ehpk` privado** (siguiente fase tras resolver el bug de render):
 
 1. [x] **Probar end-to-end en dev — HECHO (2026-06-19).** `npm run dev` + simulador con `--automation-port 9898`, hablándole al mic del Mac, los 3 modos validados con screenshots de las gafas: modo 1 translate-word ("RÁPIDO."), modo 2 transcribe-word ("TODAY?", idioma original sin traducir), modo 3 translate-sentence ("VINCULADO A LAS GRANDES FARMACÉUTICAS"). Deepgram + Google Translate OK, 0 errores. Verificado vía log `[diag]` temporal que `onLatestWord` llega en modo 2 (el "blank" inicial fue timing del screenshot, no bug). `WORD_DRIP_MS=350` se sintió bien, no se ajustó.
-2. [x] **Sideload en gafas reales — FUNCIONA (2026-06-19), con bug de render abierto (ver abajo).** `cd /Users/juanf/oneword && npx evenhub qr --url http://<IP-LAN>:5173` (IP del Mac en WiFi, p.ej. `192.168.86.247`; **correr DESDE la carpeta del proyecto** o `evenhub` da 404 npm). Oneword carga y corre en las gafas físicas con hot-reload. Confirmado: las llamadas Deepgram + Google funcionan desde el teléfono.
-3. [ ] **Verificar `app.json` antes de empaquetar — HECHO, está OK**: `min_sdk_version=0.0.10`, `name` ≤20 chars, permisos `g2-microphone` + `network` con whitelist `api.deepgram.com` + `translation.googleapis.com`. (`package_id=com.example.oneword` usa namespace placeholder; irrelevante para privado.)
+2. [x] **Sideload en gafas reales — FUNCIONA (2026-06-19), con bug de render abierto (ver abajo).** `cd /Users/juanf/onephrase && npx evenhub qr --url http://<IP-LAN>:5173` (IP del Mac en WiFi, p.ej. `192.168.86.247`; **correr DESDE la carpeta del proyecto** o `evenhub` da 404 npm). Onephrase carga y corre en las gafas físicas con hot-reload. Confirmado: las llamadas Deepgram + Google funcionan desde el teléfono.
+3. [ ] **Verificar `app.json` antes de empaquetar — HECHO, está OK**: `min_sdk_version=0.0.10`, `name` ≤20 chars, permisos `g2-microphone` + `network` con whitelist `api.deepgram.com` + `translation.googleapis.com`. (`package_id=com.example.onephrase` usa namespace placeholder; irrelevante para privado.)
 4. [ ] `npm run build` → `tsc --noEmit && vite build` produce `dist/`. (Type-check ya pasa limpio.)
-5. [ ] **Empaquetar — sintaxis correcta** (la doc del CLI difiere del comando viejo): `npx evenhub pack app.json dist -o oneword-0.1.0.ehpk`. Las llaves `.env.local` quedan **bakeadas en el bundle** — ver Gotcha #1; aceptable porque la app es privada.
+5. [ ] **Empaquetar — sintaxis correcta** (la doc del CLI difiere del comando viejo): `npx evenhub pack app.json dist -o onephrase-0.1.0.ehpk`. Las llaves `.env.local` quedan **bakeadas en el bundle** — ver Gotcha #1; aceptable porque la app es privada.
 6. [ ] **Cargar el `.ehpk` (flujo "Private testing")**: subir el `.ehpk` en `hub.evenrealities.com/login` → proyecto → pestaña **Private builds**. Luego en la app: **Me → Apps → Private builds → Install** (requiere Developer Mode activo, ver gotcha). NO tiene hot-reload (~10s por ciclo).
 
 **Mejoras razonables una vez funcionando:**

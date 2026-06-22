@@ -15,7 +15,7 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
   app.innerHTML = `
     <main class="panel">
       <header>
-        <h1>Oneword</h1>
+        <h1>Onephrase</h1>
         <div class="head-right">
           <span id="lang" class="chip chip-muted">auto → —</span>
         </div>

@@ -25,7 +25,7 @@ import {
 
 const TARGET_LANG = 'es'
 const MODE_BANNER_MS = 900         // how long the mode label flashes on the glasses when cycling
-const MODE_STORAGE_KEY = 'oneword:mode'
+const MODE_STORAGE_KEY = 'onephrase:mode'
 
 const DEEPGRAM_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY as string
 const GOOGLE_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string
