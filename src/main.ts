@@ -8,12 +8,13 @@ import { startSttStream } from './asr/stt'
 import { translate } from './asr/translate'
 import {
   GlassesStage,
+  formatMenu,
   CANVAS_W,
   CANVAS_H,
   CONTAINER_ID,
   CONTAINER_NAME,
 } from './glasses-render'
-import { MODES, MODE_GLASSES_LABELS, nextMode, type Mode } from './modes'
+import { MODES, MODE_MENU_LABELS, nextMode, type Mode } from './modes'
 import {
   mountUi,
   setStatus,
@@ -26,28 +27,35 @@ import {
 
 // Bump this with every change and keep it in sync with the ?v=N in the QR URL,
 // so the app shows which bundle is actually loaded (cache-bust verification).
-const BUILD = 'v8'
+const BUILD = 'v14'
 
 const TARGET_LANG = 'es'
-const MODE_BANNER_MS = 900         // how long the mode label flashes on the glasses when cycling
 const MODE_STORAGE_KEY = 'onephrase:mode'
+const BLINK_MS = 800               // "OP" blink period in the idle menu
 
 const DEEPGRAM_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY as string
 const GOOGLE_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string
 
 let currentMode: Mode = 'translate'
-let modeBannerTimer: number | null = null
+// Idle menu state: shown at startup and after IDLE_CLEAR_MS of silence. The
+// blink timer toggles the "OP" header on/off; a phrase arriving exits the menu.
+let menuActive = false
+let blinkOn = true
+let blinkTimer: number | null = null
 
 // Phrase display queue — every finalized phrase is shown for a time that
 // SCALES WITH ITS LENGTH: longer phrases get more reading time, single words
 // don't linger. So none is skipped and none overstays. Writes stay
 // sentence-level and spaced, well under the BLE rate that froze the word drip.
-const PHRASE_BASE_MS = 600       // fixed time to notice + start reading
-const PHRASE_PER_WORD_MS = 320   // added per word of the phrase
-const PHRASE_MIN_MS = 900        // floor (e.g. a single short word)
-const PHRASE_MAX_MS = 5500       // ceiling (a very long phrase)
+const PHRASE_BASE_MS = 750       // fixed time to notice + start reading
+const PHRASE_PER_WORD_MS = 290   // added per word (calibrated to the user's reading-time table)
+const PHRASE_MIN_MS = 1100       // floor (e.g. a single short word)
+const PHRASE_MAX_MS = 4500       // ceiling (a very long phrase)
+const PHRASE_CATCHUP_MS = 800    // brief dwell while phrases are still queued behind (catch up, no drop)
+const IDLE_CLEAR_MS = 20000      // wipe the glasses after this long with no new phrase
 let phraseQueue: string[] = []
 let phraseTimer: number | null = null
+let idleClearTimer: number | null = null
 let phraseGen = 0 // bumped on mode switch to drop stale queued/in-flight phrases
 let translateChain: Promise<void> = Promise.resolve() // serializes translations to preserve order
 
@@ -98,8 +106,8 @@ if (created !== 0) {
 
 const glasses = new GlassesStage(bridge)
 
-// Show the mode label briefly when the app starts, then settle.
-flashModeBanner(currentMode)
+// Rest in the idle menu at startup — it shows the persisted active mode.
+enterMenu()
 
 let stt: ReturnType<typeof startSttStream> | null = null
 try {
@@ -175,6 +183,9 @@ function enqueuePhrase(text: string) {
   const t = (text || '').trim()
   if (!t) return
   phraseQueue.push(t)
+  // No phrase is ever dropped (that was the "skipping"). When we fall behind,
+  // drainPhraseQueue shortens each phrase's dwell to catch up — like the
+  // official app, but anchored so the text doesn't jump.
   if (phraseTimer === null) drainPhraseQueue()
 }
 
@@ -192,8 +203,58 @@ function drainPhraseQueue() {
     phraseTimer = null
     return
   }
-  glasses.setCenteredSentence(next)
-  phraseTimer = window.setTimeout(drainPhraseQueue, dwellMs(next))
+  exitMenu() // a phrase replaces the idle menu; stop the blink
+  glasses.setAnchoredSentence(next) // fixed top-left origin so the eye stays put
+  scheduleIdleClear()
+  // If phrases are still queued behind, we're behind the speaker — show this
+  // one only briefly so the backlog drains and the display stays close to real
+  // time. Only the last phrase (empty queue) gets its full reading time.
+  const ms = phraseQueue.length > 0 ? PHRASE_CATCHUP_MS : dwellMs(next)
+  phraseTimer = window.setTimeout(drainPhraseQueue, ms)
+}
+
+// Reset the idle timer on every new phrase; when it expires (no phrase for
+// IDLE_CLEAR_MS) fall back to the idle menu so stale text doesn't linger and
+// the app still signals it's alive + which mode is active.
+function scheduleIdleClear() {
+  if (idleClearTimer !== null) clearTimeout(idleClearTimer)
+  idleClearTimer = window.setTimeout(() => {
+    idleClearTimer = null
+    enterMenu()
+  }, IDLE_CLEAR_MS)
+}
+
+// ─── Idle menu ────────────────────────────────────────────────────────
+
+function drawMenu() {
+  const items = MODES.map(m => ({ label: MODE_MENU_LABELS[m], active: m === currentMode }))
+  glasses.setRaw(formatMenu(items, blinkOn))
+}
+
+function enterMenu() {
+  menuActive = true
+  // The menu is the resting state — cancel any pending idle fallback.
+  if (idleClearTimer !== null) {
+    clearTimeout(idleClearTimer)
+    idleClearTimer = null
+  }
+  blinkOn = true
+  drawMenu()
+  if (blinkTimer === null) {
+    blinkTimer = window.setInterval(() => {
+      blinkOn = !blinkOn
+      drawMenu()
+    }, BLINK_MS)
+  }
+}
+
+function exitMenu() {
+  if (!menuActive) return
+  menuActive = false
+  if (blinkTimer !== null) {
+    clearInterval(blinkTimer)
+    blinkTimer = null
+  }
 }
 
 // ─── Mode switching (phone + glasses tap) ─────────────────────────────
@@ -211,18 +272,10 @@ function switchMode(next: Mode, source: 'phone' | 'glasses') {
     phraseTimer = null
   }
 
-  flashModeBanner(next)
+  // Show the idle menu so the new active mode is reflected immediately on the
+  // glasses (replaces the old transient mode banner). The next phrase exits it.
+  enterMenu()
   console.log(`mode → ${next} (via ${source})`)
-}
-
-function flashModeBanner(mode: Mode) {
-  glasses.setCenteredSentence(MODE_GLASSES_LABELS[mode], false) // false = keep lowercase
-  if (modeBannerTimer !== null) clearTimeout(modeBannerTimer)
-  modeBannerTimer = window.setTimeout(() => {
-    modeBannerTimer = null
-    // Clear the banner only if nothing else has been drawn since.
-    glasses.clear()
-  }, MODE_BANNER_MS)
 }
 
 // ─── Event routing ────────────────────────────────────────────────────
@@ -261,8 +314,9 @@ let cleanedUp = false
 function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
-  if (modeBannerTimer !== null) clearTimeout(modeBannerTimer)
+  if (blinkTimer !== null) clearInterval(blinkTimer)
   if (phraseTimer !== null) clearTimeout(phraseTimer)
+  if (idleClearTimer !== null) clearTimeout(idleClearTimer)
   bridge.audioControl(false)
   stt?.close()
   unsubscribe()

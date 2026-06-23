@@ -20,6 +20,14 @@ export const MODE_GLASSES_LABELS: Record<Mode, string> = {
   transcribe: 'transcripción',
 }
 
+// Capitalized labels for the idle menu on the glasses (one line per mode, the
+// active one marked). Shown while no phrase is on screen, so the app signals
+// it's still alive and which mode is active.
+export const MODE_MENU_LABELS: Record<Mode, string> = {
+  translate: 'Traductor',
+  transcribe: 'Transcripción',
+}
+
 export function nextMode(current: Mode): Mode {
   const idx = MODES.indexOf(current)
   return MODES[(idx + 1) % MODES.length]

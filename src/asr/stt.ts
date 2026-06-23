@@ -55,10 +55,11 @@ const DEEPGRAM_URL =
   '&smart_format=true' +
   '&utterance_end_ms=1000' + // mínimo de Deepgram; no baja más
   // endpointing = ms de silencio antes de marcar speech_final (cierra la frase).
-  // Bajado 300→150 para que cada frase se finalice/pinte en pausas más cortas y
-  // no se "salten" frases cuando se habla seguido. Si fragmenta demasiado (corta
-  // frases a media idea), subirlo a ~200-250.
-  '&endpointing=150'
+  // Subido a 300 para cerrar en fronteras de ORACIÓN natural (no a media idea):
+  // mejor contexto de traducción y menos parpadeo de pantalla. Ya no bajamos a
+  // 150 porque la acumulación de is_final + el catch-up (sin descartar frases)
+  // evitan el "saltarse frases" que antes intentábamos resolver fragmentando.
+  '&endpointing=300'
 
 export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
   if (!apiKey) throw new Error('Deepgram API key missing — set VITE_DEEPGRAM_API_KEY in .env.local')
@@ -74,6 +75,30 @@ export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
   // Trailing word of the in-progress utterance. Re-emitted only when it
   // actually changes — avoids flooding the UI with duplicate events.
   let lastTrailingWord = ''
+
+  // Accumulated finalized transcript for the current utterance. Deepgram may
+  // split one utterance into several is_final messages, each carrying only its
+  // own segment — so we append them here and flush the whole buffer at the end.
+  // Flushing on speech_final alone (the previous code) dropped earlier segments.
+  let finalBuffer = ''
+  let lastLang = 'unknown'
+
+  // Safety net only. Normally speech_final/UtteranceEnd close phrases at natural
+  // sentence pauses (endpointing=300). This just stops a pause-less monologue
+  // from growing into an unbounded blob — set high so we DON'T cut mid-sentence
+  // (cutting at 8 words hurt translation quality and readability).
+  const FLUSH_MAX_WORDS = 24
+
+  // Emit the accumulated utterance once and reset. Guarded so a stray flush
+  // (e.g. an UtteranceEnd arriving after speech_final already cleared the
+  // buffer) does nothing instead of emitting an empty/duplicate phrase.
+  function flushUtterance() {
+    const transcript = finalBuffer.trim()
+    if (!transcript) return
+    cb.onUtterance?.({ transcript, detectedLang: lastLang })
+    finalBuffer = ''
+    lastTrailingWord = ''
+  }
 
   ws.addEventListener('open', () => {
     isOpen = true
@@ -91,6 +116,10 @@ export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
       return
     }
     if (msg.type === 'Results') handleResults(msg)
+    // UtteranceEnd is the fallback finalizer: when background noise keeps the
+    // VAD from emitting speech_final, Deepgram still detects the word-gap and
+    // sends this. A no-op if speech_final already flushed the buffer.
+    else if (msg.type === 'UtteranceEnd') flushUtterance()
   })
 
   ws.addEventListener('error', err => {
@@ -127,11 +156,22 @@ export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
       }
     }
 
-    // Utterance complete — emit full transcript so translator can run.
-    if (isFinal && speechFinal) {
-      cb.onUtterance?.({ transcript, detectedLang })
-      lastTrailingWord = '' // reset for next utterance
+    // A finalized segment: append it to the utterance buffer (Deepgram won't
+    // revise these words). Interim results (is_final=false) only drive the
+    // live word mirror above and never touch the buffer.
+    if (isFinal) {
+      finalBuffer = finalBuffer ? `${finalBuffer} ${transcript}` : transcript
+      lastLang = detectedLang
+      // Long monologue with no pause: flush once the buffer reaches a
+      // glance-sized phrase instead of waiting for speech_final.
+      const wordCount = finalBuffer.split(/\s+/).filter(Boolean).length
+      if (wordCount >= FLUSH_MAX_WORDS) flushUtterance()
     }
+
+    // speech_final marks the end of the utterance via silence — flush the
+    // accumulated buffer (which may span several is_final segments). A no-op
+    // if the word-cap above already flushed it.
+    if (speechFinal) flushUtterance()
   }
 
   return {

@@ -70,6 +70,42 @@ export function formatCenteredSentence(sentence: string, upper = true): string {
   return `${topPad}${padded}`
 }
 
+// Idle menu: a single horizontal line, "OP >Traductor  Transcripción", with a
+// ">" right before the active mode. `headerVisible` drives the blinking "OP":
+// when false the slot is filled with spaces so the line keeps the same width
+// and stays centered (no horizontal jitter as it blinks).
+export interface MenuItem {
+  label: string
+  active: boolean
+}
+
+const MENU_HEADER = 'OP'
+
+export function formatMenu(items: MenuItem[], headerVisible: boolean): string {
+  const tail = items.map(i => (i.active ? '>' : '') + i.label).join('  ')
+  // Always center on the header-visible width so the line doesn't move on blink.
+  const leftPad = spacesForLeftPad(getTextWidth(`${MENU_HEADER} ${tail}`), CANVAS_W)
+  const head = headerVisible ? MENU_HEADER : ' '.repeat(MENU_HEADER.length)
+  const topPad = blankLinesForVerticalPad(LINE_H, CANVAS_H)
+  return `${topPad}${leftPad}${head} ${tail}`
+}
+
+// Top-left anchored phrase render. Unlike the centered formatter, text ALWAYS
+// starts at the same fixed origin (constant top + left margin) and grows
+// downward — so when a new phrase replaces the old one the reader's eye stays
+// put instead of chasing a re-centered block. Natural case (no uppercasing).
+const ANCHOR_TOP_LINES = 1 // constant blank lines above the text (breathing room)
+const ANCHOR_LEFT_SPACES = 2 // constant left margin
+
+export function formatAnchored(sentence: string): string {
+  const norm = (sentence || '').trim()
+  if (!norm) return ''
+  const leftPad = ' '.repeat(ANCHOR_LEFT_SPACES)
+  const usableW = CANVAS_W - ANCHOR_LEFT_SPACES * SPACE_W
+  const lines = greedyWrap(norm, usableW).map(l => leftPad + l)
+  return '\n'.repeat(ANCHOR_TOP_LINES) + lines.join('\n')
+}
+
 function greedyWrap(text: string, maxW: number): string[] {
   const words = text.split(/\s+/).filter(Boolean)
   const lines: string[] = []
@@ -129,8 +165,15 @@ export class GlassesStage {
     this.setRaw(formatCenteredSentence(sentence, upper))
   }
 
+  setAnchoredSentence(sentence: string) {
+    this.setRaw(formatAnchored(sentence))
+  }
+
   clear() {
-    this.setRaw('')
+    // NOT '' — the G2 treats empty content as "no change" and leaves the old
+    // text on screen. A single space replaces the content with a blank line,
+    // which visibly clears the display.
+    this.setRaw(' ')
   }
 
   private schedule() {

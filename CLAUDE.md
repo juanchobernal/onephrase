@@ -9,7 +9,7 @@ App de traducción para **gafas Even Realities G2** que escucha por el micrófon
 1. **`translate`** — Auto-detect → ES. Frase completa traducida, centrada (wrap-line si no cabe), reemplaza al llegar la siguiente. Default al iniciar.
 2. **`transcribe`** — Auto-detect (sin traducir). Frase completa en el idioma original, centrada.
 
-Single-tap = cicla 1→2→1 (muestra el nombre del modo en pantalla 900 ms). Double-tap = salir con diálogo. Modo activo persiste vía `bridge.setLocalStorage`.
+Single-tap = cicla 1→2→1. Double-tap = salir con diálogo. Modo activo persiste vía `bridge.setLocalStorage`. En reposo (al inicio y tras 20 s de silencio) se muestra un **menú de una línea `OP >Traductor  Transcripción`** con "OP" parpadeando y `>` antes del modo activo; el tap alterna el modo y refleja el cambio en el menú.
 
 > **Por qué solo frases (no palabra-a-palabra):** los modos `*-word` originales (drip de 350 ms) **congelaban el display en hardware real**. Causa raíz confirmada (2026-06-22): el audio del mic sube por el mismo enlace **BLE** que las escrituras al display; escribir *mientras* se habla satura el BLE y cuelga las escrituras. Escribir **al pausar** (fin de utterance, cuando el audio baja) lo resuelve. Ver detalle en la sección de bug resuelto abajo.
 
@@ -31,7 +31,7 @@ onephrase/
 ├── src/
 │   ├── main.ts              # bridge init, mode state, ruteo STT→traducir→render, manejo de eventos
 │   ├── modes.ts             # tipo Mode, lista MODES[], labels (HTML + glasses uppercase), nextMode(), isTranslationMode()
-│   ├── glasses-render.ts    # GlassesStage (debounced textContainerUpgrade), formatCenteredWord/Sentence, espaciado + newlines para centrar
+│   ├── glasses-render.ts    # GlassesStage (debounced textContainerUpgrade); formatAnchored (frases ancladas arriba-izq), formatCenteredWord/Sentence, formatMenu (menú de reposo 1 línea)
 │   ├── ui.ts                # UI del teléfono: selector 2 modos, chip idioma (auto→lang, rojo en error), boards transcripción/traducción
 │   └── asr/
 │       ├── stt.ts           # Cliente Deepgram WS, emite onLatestWord (mirror en teléfono) + onUtterance (dispara ambos modos)
@@ -65,13 +65,16 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 
 | Constante | Archivo | Default | Qué controla |
 |---|---|---|---|
-| `PHRASE_BASE_MS` | `src/main.ts` | `600` | Tiempo base que cada frase está en pantalla (cola adaptativa) |
-| `PHRASE_PER_WORD_MS` | `src/main.ts` | `320` | ms añadidos por palabra (tiempo de lectura proporcional) |
-| `PHRASE_MIN_MS` / `PHRASE_MAX_MS` | `src/main.ts` | `900` / `5500` | Piso/techo del tiempo por frase |
-| `MODE_BANNER_MS` | `src/main.ts` | `900` | Cuánto dura el nombre del modo en pantalla tras cambiar. |
+| `PHRASE_BASE_MS` | `src/main.ts` | `750` | Tiempo base por frase (cola con catch-up) |
+| `PHRASE_PER_WORD_MS` | `src/main.ts` | `290` | ms añadidos por palabra (calibrado con la tabla de lectura del usuario) |
+| `PHRASE_MIN_MS` / `PHRASE_MAX_MS` | `src/main.ts` | `1100` / `4500` | Piso/techo del tiempo por frase |
+| `PHRASE_CATCHUP_MS` | `src/main.ts` | `800` | Dwell corto cuando hay frases en cola detrás. **NO se descartan frases** (no-skip); cuando va atrás se acorta el dwell para alcanzar. |
+| `IDLE_CLEAR_MS` | `src/main.ts` | `20000` | Silencio tras el cual la pantalla vuelve al menú de reposo (`enterMenu`) |
+| `BLINK_MS` | `src/main.ts` | `800` | Periodo de parpadeo del "OP" en el menú de reposo |
+| `FLUSH_MAX_WORDS` | `src/asr/stt.ts` | `24` | Red de seguridad: corta una frase sin pausa al llegar a N palabras (evita blob). **Causa párrafos largos — bajar (ver TODO).** |
 | `TARGET_LANG` | `src/main.ts` | `'es'` | Idioma destino para traducción. |
-| `BUILD` | `src/main.ts` | `'v8'` | Etiqueta de versión mostrada en el header de la app. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
-| `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `150` | ms de silencio para cerrar una frase. Bajo = menos skips pero fragmenta más. **Modelo real = `nova-3` + `language=multi`** (la SDK ref/notas viejas decían nova-2, está desactualizado). |
+| `BUILD` | `src/main.ts` | `'v14'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
+| `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `300` | ms de silencio para cerrar frase en **oración natural**. Subió de 150 (ya no fragmentamos para evitar skips — eso lo resuelve la acumulación + no-drop). **Modelo real = `nova-3` + `language=multi`**. |
 | `DEBOUNCE_MS` | `src/glasses-render.ts` | `120` | Debounce para `textContainerUpgrade` (la cola BLE es lenta — bajarlo causa lag). |
 
 ## Gotchas no obvias
@@ -96,16 +99,21 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 
 ## Estado pendiente / TODO al retomar
 
-### 🔧 EN CURSO (2026-06-22, sesión 4) — pulir el display de frases
+### 🔧 EN CURSO (2026-06-23, sesión 5) — calidad de traducción + anclaje + menú
 
-**Hecho esta sesión:** rename `oneword`→`onephrase` (carpeta + repo GitHub `juanchobernal/onephrase`); UI del teléfono (chip único `auto → idioma`, labels de modo en minúscula, banner de modo en las gafas en minúscula vía `formatCenteredSentence(.., upper=false)`, **etiqueta de build `vN` en el header**); arreglo del **skipping** = **cola de frases con tiempo de lectura adaptativo** (`PHRASE_*` en `main.ts`: `dwellMs()` + `enqueuePhrase`/`drainPhraseQueue`, se quitó `pendingUtteranceId`, se serializa la traducción con `translateChain` para preservar orden) + `endpointing` 300→150 en Deepgram. **Resultado: ya NO se salta frases**, pero quedan problemas.
+**Hecho esta sesión (build v14, validado en simulador; pendiente prueba final en gafas):**
+- **Deepgram (root-cause del skipping):** se **acumulan los segmentos `is_final`** y se vacía el buffer en `speech_final` **o** en el evento **`UtteranceEnd`** (antes se ignoraba y se perdían segmentos de frases largas — anti-patrón confirmado en la doc de Deepgram). `endpointing` 150→**300** (cierra en oración natural). `FLUSH_MAX_WORDS=24` como red de seguridad anti-blob. Archivo `src/asr/stt.ts` con `flushUtterance()`.
+- **No-skip / anti-lag:** se **eliminó el descarte de cola** (`PHRASE_MAX_QUEUE`). Ya **no se salta ninguna frase**; cuando va atrás se acorta el dwell (`PHRASE_CATCHUP_MS=800`) para alcanzar — como la app oficial pero sin saltos.
+- **Anclaje de texto (clave):** las frases se renderizan **ancladas arriba-izquierda fijo** (`formatAnchored`/`setAnchoredSentence`), no centradas. El ojo ya no se pierde al llegar una frase nueva — **supera el único defecto de la app oficial de Even Realities** (que mueve las frases). Decisión del usuario: arriba-izq fijo.
+- **Mayúsculas+minúsculas:** las frases salen en caja natural (no TODO MAYÚS).
+- **Menú de reposo:** reposo (inicio + tras 20 s de silencio) = menú de una línea **`OP >Traductor  Transcripción`** con "OP" parpadeando (`BLINK_MS`, `formatMenu`), `>` antes del activo; el tap alterna. Reemplazó el banner transitorio y el clear-a-blanco. **Fix:** `clear()` escribía `''` que el G2 ignora (no borraba); ahora escribe un espacio. `MODE_MENU_LABELS` en `modes.ts`.
 
-**Problemas abiertos (resolver la próxima sesión):**
-1. **Desfases (lag):** con habla continua la cola se acumula y el display se atrasa respecto al hablante (el atraso = suma de los tiempos de cada frase en cola). Decidir cómo recortar el atraso **sin** volver a saltar frases (¿cap de cola? ¿acortar dwell cuando la cola está larga? ¿saltar a la última si va muy atrás?).
-2. **Congelamientos (volvieron):** la cola escribe **durante** el habla (a veces ~900ms entre frases cortas), acercándose al umbral BLE que congelaba el word-drip. Revisar: subir espaciado mínimo, o escribir solo en ventanas de silencio.
-3. **Auto-limpiar pantalla:** sacar la última frase del display tras **20 s de silencio** (timer que se resetea con cada utterance; al expirar → `glasses.clear()`).
-4. **Calibrar el tiempo de lectura** con la tabla del usuario (abajo). La fórmula actual `600 + 320×palabras` (clamp 900–5500) ya queda cerca; afinar con datos reales.
-5. **Aprovechar mejor Deepgram (deepgram.com):** explorar features para mejor segmentación/latencia — `utterance_end`, `interim_results` para arrancar antes, `smart_format`/puntuación, modelos, etc.
+**Acceso al traductor de Even Realities — DESCARTADO (verificado 2026-06-23):** el SDK solo expone **PCM crudo del mic (16 kHz mono)**; su traducción/STT vive en su **nube cerrada, sin API pública**. No se puede invocar desde una app de terceros. Su app es más precisa por **pipeline integrado STT+traducción co-afinado + 4 mics direccionales con filtrado de ruido**; nosotros pegamos Deepgram + Google Translate v2 genéricos. Estrategia: igualar su comportamiento (sin saltos/descartes) y **ganarles en el anclaje** (ya hecho). Fuente: zenn.dev/bigdra (SDK feature verification).
+
+**Problemas abiertos (próxima sesión, sesión 6) — PRIORIDAD:**
+1. **La primera frase tarda demasiado en aparecer.** Con `endpointing=300` + acumulación, la primera pintada espera a la pausa / `speech_final`. Explorar: pintar antes (¿`interim_results` para el primer paint?, endpointing más bajo solo en el arranque, o mostrar parcial mientras Google traduce).
+2. **Párrafos de hasta 4 líneas — demasiado largo.** Causa directa: `FLUSH_MAX_WORDS=24` + `endpointing=300` generan frases largas. Bajar el cap (¿12–15 palabras ≈ 2 líneas?) y/o partir oraciones largas, **sin** volver a cortar a media idea ni reintroducir skipping. Trade-off a calibrar con uso real.
+3. **Calibrar dwell/catch-up con uso real** contra la tabla de abajo (`PHRASE_*`, `PHRASE_CATCHUP_MS`). Si el atraso molesta con habla rápida, bajar `PHRASE_CATCHUP_MS`.
 
 **Tabla de tiempos de lectura objetivo (referencia del usuario, 2026-06-22):**
 
