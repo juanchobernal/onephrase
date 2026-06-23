@@ -53,8 +53,12 @@ const DEEPGRAM_URL =
   '&interim_results=true' +
   '&punctuate=true' +
   '&smart_format=true' +
-  '&utterance_end_ms=1000' +
-  '&endpointing=300'
+  '&utterance_end_ms=1000' + // mínimo de Deepgram; no baja más
+  // endpointing = ms de silencio antes de marcar speech_final (cierra la frase).
+  // Bajado 300→150 para que cada frase se finalice/pinte en pausas más cortas y
+  // no se "salten" frases cuando se habla seguido. Si fragmenta demasiado (corta
+  // frases a media idea), subirlo a ~200-250.
+  '&endpointing=150'
 
 export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
   if (!apiKey) throw new Error('Deepgram API key missing — set VITE_DEEPGRAM_API_KEY in .env.local')

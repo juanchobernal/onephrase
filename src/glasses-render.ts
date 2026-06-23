@@ -48,8 +48,9 @@ export function formatCenteredWord(word: string): string {
   return `${topPad}${leftPad}${up}`
 }
 
-export function formatCenteredSentence(sentence: string): string {
-  const up = (sentence || '').toUpperCase().trim()
+export function formatCenteredSentence(sentence: string, upper = true): string {
+  const norm = (sentence || '').trim()
+  const up = upper ? norm.toUpperCase() : norm
   if (!up) return ''
   const wrap = measureTextWrap(up, CANVAS_W)
 
@@ -124,8 +125,8 @@ export class GlassesStage {
     this.setRaw(formatCenteredWord(word))
   }
 
-  setCenteredSentence(sentence: string) {
-    this.setRaw(formatCenteredSentence(sentence))
+  setCenteredSentence(sentence: string, upper = true) {
+    this.setRaw(formatCenteredSentence(sentence, upper))
   }
 
   clear() {

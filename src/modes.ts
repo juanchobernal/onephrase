@@ -12,10 +12,12 @@ export const MODE_LABELS: Record<Mode, string> = {
   transcribe: 'transcripción · frase',
 }
 
-// Short uppercase labels shown briefly on the glasses when the mode cycles.
+// Lowercase labels shown briefly on the glasses when the mode cycles. Rendered
+// with upper=false so they stay lowercase (translated/transcribed content is
+// still uppercased).
 export const MODE_GLASSES_LABELS: Record<Mode, string> = {
-  translate: 'TRADUCCIÓN',
-  transcribe: 'TRANSCRIPCIÓN',
+  translate: 'traducción',
+  transcribe: 'transcripción',
 }
 
 export function nextMode(current: Mode): Mode {

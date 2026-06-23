@@ -5,6 +5,7 @@ type Status = 'connecting' | 'listening' | 'error'
 let transcriptEl: HTMLDivElement
 let translationEl: HTMLDivElement
 let langChipEl: HTMLSpanElement
+let buildEl: HTMLSpanElement
 let modeButtons: Map<Mode, HTMLButtonElement> = new Map()
 
 let onModeChange: ((m: Mode) => void) | null = null
@@ -15,7 +16,7 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
   app.innerHTML = `
     <main class="panel">
       <header>
-        <h1>Onephrase</h1>
+        <h1>Onephrase <span id="build" class="build"></span></h1>
         <div class="head-right">
           <span id="lang" class="chip chip-muted">auto → —</span>
         </div>
@@ -41,6 +42,7 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
   transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
   translationEl = app.querySelector<HTMLDivElement>('#translation')!
   langChipEl = app.querySelector<HTMLSpanElement>('#lang')!
+  buildEl = app.querySelector<HTMLSpanElement>('#build')!
 
   for (const btn of app.querySelectorAll<HTMLButtonElement>('.mode-btn')) {
     const m = btn.dataset.mode as Mode
@@ -49,6 +51,12 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
   }
   setActiveMode(initialMode)
   injectStyles()
+}
+
+// Build/version tag next to the title — lets you confirm which bundle loaded
+// (must match the ?v=N you scanned).
+export function setBuildInfo(text: string) {
+  if (buildEl) buildEl.textContent = text
 }
 
 export function setActiveMode(mode: Mode) {
@@ -105,6 +113,7 @@ function injectStyles() {
       border: 1px solid #3E3E3E; color: #A7A7A7; letter-spacing: 0.04em; text-transform: uppercase; }
     .chip-muted { background: #2E2E2E; }
     .chip-error { background: rgba(255,69,58,0.12); border-color: #FF453A; color: #FF453A; text-transform: none; }
+    .build { font-size: 12px; font-weight: 400; color: #FF9F0A; letter-spacing: 0.02em; }
     .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
     .mode-btn { appearance: none; cursor: pointer; padding: 12px 10px;
       background: #2E2E2E; color: #E5E5E5; border: 1px solid #3E3E3E;

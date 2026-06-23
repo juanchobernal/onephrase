@@ -65,11 +65,14 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 
 | Constante | Archivo | Default | Qué controla |
 |---|---|---|---|
-| `WORD_DRIP_MS` | `src/main.ts` | `350` | Tiempo entre palabras en modo 1 (translate-word). Reducir para más rápido. |
+| `PHRASE_BASE_MS` | `src/main.ts` | `600` | Tiempo base que cada frase está en pantalla (cola adaptativa) |
+| `PHRASE_PER_WORD_MS` | `src/main.ts` | `320` | ms añadidos por palabra (tiempo de lectura proporcional) |
+| `PHRASE_MIN_MS` / `PHRASE_MAX_MS` | `src/main.ts` | `900` / `5500` | Piso/techo del tiempo por frase |
 | `MODE_BANNER_MS` | `src/main.ts` | `900` | Cuánto dura el nombre del modo en pantalla tras cambiar. |
 | `TARGET_LANG` | `src/main.ts` | `'es'` | Idioma destino para traducción. |
+| `BUILD` | `src/main.ts` | `'v8'` | Etiqueta de versión mostrada en el header de la app. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
+| `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `150` | ms de silencio para cerrar una frase. Bajo = menos skips pero fragmenta más. **Modelo real = `nova-3` + `language=multi`** (la SDK ref/notas viejas decían nova-2, está desactualizado). |
 | `DEBOUNCE_MS` | `src/glasses-render.ts` | `120` | Debounce para `textContainerUpgrade` (la cola BLE es lenta — bajarlo causa lag). |
-| Deepgram URL params | `src/asr/stt.ts` | ver `DEEPGRAM_URL` | Modelo, idioma, endpointing. `model=nova-2-general` es multilingüe. |
 
 ## Gotchas no obvias
 
@@ -92,6 +95,35 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 **Por qué Deepgram + Google Translate y no la app oficial Translate de Even Realities**: Even Realities no expone STT on-device en el SDK (confirmado en GitHub topic `g2-glasses` y en su soporte — la app oficial Translate corre en su nube cerrada, sin API pública). Para construir nuestra propia traducción tenemos que cablear servicios nube nosotros. Deepgram da streaming sub-segundo de palabras (clave para el modo 2 transcribe-word en tiempo real) y Google Translate v2 sirve con la misma `GOOGLE_API_KEY` que ya tienes en GCP (project `92102193775`).
 
 ## Estado pendiente / TODO al retomar
+
+### 🔧 EN CURSO (2026-06-22, sesión 4) — pulir el display de frases
+
+**Hecho esta sesión:** rename `oneword`→`onephrase` (carpeta + repo GitHub `juanchobernal/onephrase`); UI del teléfono (chip único `auto → idioma`, labels de modo en minúscula, banner de modo en las gafas en minúscula vía `formatCenteredSentence(.., upper=false)`, **etiqueta de build `vN` en el header**); arreglo del **skipping** = **cola de frases con tiempo de lectura adaptativo** (`PHRASE_*` en `main.ts`: `dwellMs()` + `enqueuePhrase`/`drainPhraseQueue`, se quitó `pendingUtteranceId`, se serializa la traducción con `translateChain` para preservar orden) + `endpointing` 300→150 en Deepgram. **Resultado: ya NO se salta frases**, pero quedan problemas.
+
+**Problemas abiertos (resolver la próxima sesión):**
+1. **Desfases (lag):** con habla continua la cola se acumula y el display se atrasa respecto al hablante (el atraso = suma de los tiempos de cada frase en cola). Decidir cómo recortar el atraso **sin** volver a saltar frases (¿cap de cola? ¿acortar dwell cuando la cola está larga? ¿saltar a la última si va muy atrás?).
+2. **Congelamientos (volvieron):** la cola escribe **durante** el habla (a veces ~900ms entre frases cortas), acercándose al umbral BLE que congelaba el word-drip. Revisar: subir espaciado mínimo, o escribir solo en ventanas de silencio.
+3. **Auto-limpiar pantalla:** sacar la última frase del display tras **20 s de silencio** (timer que se resetea con cada utterance; al expirar → `glasses.clear()`).
+4. **Calibrar el tiempo de lectura** con la tabla del usuario (abajo). La fórmula actual `600 + 320×palabras` (clamp 900–5500) ya queda cerca; afinar con datos reales.
+5. **Aprovechar mejor Deepgram (deepgram.com):** explorar features para mejor segmentación/latencia — `utterance_end`, `interim_results` para arrancar antes, `smart_format`/puntuación, modelos, etc.
+
+**Tabla de tiempos de lectura objetivo (referencia del usuario, 2026-06-22):**
+
+| Frase | palabras | tiempo objetivo |
+|---|---|---|
+| ¿Cuál es el beneficio de estos medicamentos? | 7 | 0:03 |
+| El estudio lo demuestra. | 4 | 0:02 |
+| Hay un estudio que abarca quince años. Hay otro | 9 | 0:03 |
+| que abarca treinta años | 4 | 0:02 |
+| La quimioterapia alarga la vida entre dos y tres meses | 10 | 0:04 |
+| Dos o tres meses | 4 | 0:02 |
+| Es la suma del beneficio | 5 | 0:02 |
+| Para algunos tipos de cáncer, como el cáncer gástrico. | 9 | 0:03 |
+| Reducen la esperanza de vida. | 5 | 0:04 |
+
+→ Aprox **2s** para 4-5 palabras, **3s** para 7-9, **4s** para 10. ≈ 0.35-0.4s/palabra + base.
+
+**Recordatorio de prueba (gotcha del HMR):** cada cambio → subir `BUILD` en `main.ts` Y el `?v=N` del QR al mismo número; **confirmar en el header de la app que dice ese `vN`** — si no, estás viendo un bundle viejo cacheado (es lo que pasó esta sesión: "no lo hace bien" = código viejo).
 
 ### ✅ BUG RESUELTO (2026-06-22) — freeze del display por contención BLE audio↔display
 

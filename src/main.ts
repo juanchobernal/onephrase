@@ -21,7 +21,12 @@ import {
   setDetectedLanguage,
   setTranscript,
   setTranslation,
+  setBuildInfo,
 } from './ui'
+
+// Bump this with every change and keep it in sync with the ?v=N in the QR URL,
+// so the app shows which bundle is actually loaded (cache-bust verification).
+const BUILD = 'v8'
 
 const TARGET_LANG = 'es'
 const MODE_BANNER_MS = 900         // how long the mode label flashes on the glasses when cycling
@@ -32,6 +37,19 @@ const GOOGLE_KEY = import.meta.env.VITE_GOOGLE_API_KEY as string
 
 let currentMode: Mode = 'translate'
 let modeBannerTimer: number | null = null
+
+// Phrase display queue — every finalized phrase is shown for a time that
+// SCALES WITH ITS LENGTH: longer phrases get more reading time, single words
+// don't linger. So none is skipped and none overstays. Writes stay
+// sentence-level and spaced, well under the BLE rate that froze the word drip.
+const PHRASE_BASE_MS = 600       // fixed time to notice + start reading
+const PHRASE_PER_WORD_MS = 320   // added per word of the phrase
+const PHRASE_MIN_MS = 900        // floor (e.g. a single short word)
+const PHRASE_MAX_MS = 5500       // ceiling (a very long phrase)
+let phraseQueue: string[] = []
+let phraseTimer: number | null = null
+let phraseGen = 0 // bumped on mode switch to drop stale queued/in-flight phrases
+let translateChain: Promise<void> = Promise.resolve() // serializes translations to preserve order
 
 const bridge = await waitForEvenAppBridge()
 
@@ -45,6 +63,7 @@ try {
 }
 
 mountUi(currentMode, m => switchMode(m, 'phone'))
+setBuildInfo(BUILD)
 
 if (!DEEPGRAM_KEY) {
   setStatus('error', 'Falta VITE_DEEPGRAM_API_KEY — copia .env.example a .env.local')
@@ -121,33 +140,60 @@ function handleLatestWord(word: string) {
   setTranscript(word)
 }
 
-let pendingUtteranceId = 0
-async function handleUtterance(transcript: string, detectedLang: string) {
+function handleUtterance(transcript: string, detectedLang: string) {
   setDetectedLanguage(detectedLang)
   setTranscript(transcript)
 
-  // Transcribe: show the spoken phrase verbatim, in its original language.
+  // Transcribe: queue the spoken phrase verbatim, in its original language.
   if (currentMode === 'transcribe') {
-    glasses.setCenteredSentence(transcript)
+    enqueuePhrase(transcript)
     return
   }
 
-  // Translate: render the Spanish translation of the full phrase. Invalidate
-  // any earlier in-flight translation so a slow request doesn't clobber a
-  // newer utterance.
-  const myId = ++pendingUtteranceId
-  let translated: string
-  try {
-    translated = await translate(GOOGLE_KEY, transcript, TARGET_LANG)
-  } catch (err) {
-    setStatus('error', `Traducción: ${(err as Error)?.message ?? err}`)
-    console.error('Translate failed:', err)
+  // Translate: translate then queue. Serialize through translateChain so a
+  // fast translation can't jump ahead of an earlier, slower one (order intact).
+  const gen = phraseGen
+  const text = transcript
+  translateChain = translateChain.then(async () => {
+    if (gen !== phraseGen) return // mode switched while queued — drop
+    try {
+      const translated = await translate(GOOGLE_KEY, text, TARGET_LANG)
+      if (gen !== phraseGen) return
+      setTranslation(translated)
+      enqueuePhrase(translated)
+    } catch (err) {
+      setStatus('error', `Traducción: ${(err as Error)?.message ?? err}`)
+      console.error('Translate failed:', err)
+    }
+  })
+}
+
+// Show each phrase for a length-scaled time so none is skipped and none
+// overstays. A new phrase arriving while one is held just waits its turn; an
+// empty queue draws at once.
+function enqueuePhrase(text: string) {
+  const t = (text || '').trim()
+  if (!t) return
+  phraseQueue.push(t)
+  if (phraseTimer === null) drainPhraseQueue()
+}
+
+// Reading time for a phrase: a base plus per-word, clamped. Tune the constants
+// above if phrases feel too fast (raise) or linger too long (lower).
+function dwellMs(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length
+  const ms = PHRASE_BASE_MS + words * PHRASE_PER_WORD_MS
+  return Math.max(PHRASE_MIN_MS, Math.min(PHRASE_MAX_MS, ms))
+}
+
+function drainPhraseQueue() {
+  const next = phraseQueue.shift()
+  if (next === undefined) {
+    phraseTimer = null
     return
   }
-  if (myId !== pendingUtteranceId) return // a newer utterance superseded this one
-
-  setTranslation(translated)
-  glasses.setCenteredSentence(translated)
+  glasses.setCenteredSentence(next)
+  phraseTimer = window.setTimeout(drainPhraseQueue, dwellMs(next))
 }
 
 // ─── Mode switching (phone + glasses tap) ─────────────────────────────
@@ -157,15 +203,20 @@ function switchMode(next: Mode, source: 'phone' | 'glasses') {
   currentMode = next
   setActiveMode(next)
   bridge.setLocalStorage(MODE_STORAGE_KEY, next).catch(() => {})
-  // Invalidate any pending translation so it doesn't render under the new mode.
-  pendingUtteranceId++
+  // Drop any queued / in-flight phrases from the previous mode.
+  phraseGen++
+  phraseQueue = []
+  if (phraseTimer !== null) {
+    clearTimeout(phraseTimer)
+    phraseTimer = null
+  }
 
   flashModeBanner(next)
   console.log(`mode → ${next} (via ${source})`)
 }
 
 function flashModeBanner(mode: Mode) {
-  glasses.setCenteredSentence(MODE_GLASSES_LABELS[mode])
+  glasses.setCenteredSentence(MODE_GLASSES_LABELS[mode], false) // false = keep lowercase
   if (modeBannerTimer !== null) clearTimeout(modeBannerTimer)
   modeBannerTimer = window.setTimeout(() => {
     modeBannerTimer = null
@@ -211,6 +262,7 @@ function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
   if (modeBannerTimer !== null) clearTimeout(modeBannerTimer)
+  if (phraseTimer !== null) clearTimeout(phraseTimer)
   bridge.audioControl(false)
   stt?.close()
   unsubscribe()
