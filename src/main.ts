@@ -27,7 +27,7 @@ import {
 
 // Bump this with every change and keep it in sync with the ?v=N in the QR URL,
 // so the app shows which bundle is actually loaded (cache-bust verification).
-const BUILD = 'v14'
+const BUILD = 'v15'
 
 const TARGET_LANG = 'es'
 const MODE_STORAGE_KEY = 'onephrase:mode'

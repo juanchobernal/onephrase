@@ -4,7 +4,7 @@ Contexto para Claude Code. Esta app vive en `/Users/juanf/onephrase/`. Usuario: 
 
 ## Qué es
 
-App de traducción para **gafas Even Realities G2** que escucha por el micrófono de las gafas y muestra texto **en MAYÚSCULAS** en pantalla. Tiene **2 modos** configurables tanto desde la UI del teléfono como con un single-tap en la patilla de las gafas. **Ambos operan a nivel FRASE**: el display se escribe **una vez por utterance, después de que el hablante pausa**:
+App de traducción para **gafas Even Realities G2** que escucha por el micrófono de las gafas y muestra texto **en MAYÚSCULAS** en pantalla. Tiene **2 modos** configurables tanto desde la UI del teléfono como con un single-tap en la patilla de las gafas. **Ambos operan a nivel FRASE**: el display se escribe **una vez por ORACIÓN, apenas cierra** (en `. ! ? …`, sin esperar a que el hablante termine toda la idea — ver fix v15 abajo):
 
 1. **`translate`** — Auto-detect → ES. Frase completa traducida, centrada (wrap-line si no cabe), reemplaza al llegar la siguiente. Default al iniciar.
 2. **`transcribe`** — Auto-detect (sin traducir). Frase completa en el idioma original, centrada.
@@ -71,9 +71,9 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 | `PHRASE_CATCHUP_MS` | `src/main.ts` | `800` | Dwell corto cuando hay frases en cola detrás. **NO se descartan frases** (no-skip); cuando va atrás se acorta el dwell para alcanzar. |
 | `IDLE_CLEAR_MS` | `src/main.ts` | `20000` | Silencio tras el cual la pantalla vuelve al menú de reposo (`enterMenu`) |
 | `BLINK_MS` | `src/main.ts` | `800` | Periodo de parpadeo del "OP" en el menú de reposo |
-| `FLUSH_MAX_WORDS` | `src/asr/stt.ts` | `24` | Red de seguridad: corta una frase sin pausa al llegar a N palabras (evita blob). **Causa párrafos largos — bajar (ver TODO).** |
+| `FLUSH_MAX_WORDS` | `src/asr/stt.ts` | `24` | Red de seguridad: corta el fragmento sin puntuación terminal al llegar a N palabras (evita blob). Desde v15 las frases se vacían por **oración** (`flushCompleteSentences`), así que este tope solo aplica a monólogos sin `. ! ?`. |
 | `TARGET_LANG` | `src/main.ts` | `'es'` | Idioma destino para traducción. |
-| `BUILD` | `src/main.ts` | `'v14'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
+| `BUILD` | `src/main.ts` | `'v15'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
 | `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `300` | ms de silencio para cerrar frase en **oración natural**. Subió de 150 (ya no fragmentamos para evitar skips — eso lo resuelve la acumulación + no-drop). **Modelo real = `nova-3` + `language=multi`**. |
 | `DEBOUNCE_MS` | `src/glasses-render.ts` | `120` | Debounce para `textContainerUpgrade` (la cola BLE es lenta — bajarlo causa lag). |
 
@@ -110,10 +110,13 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 
 **Acceso al traductor de Even Realities — DESCARTADO (verificado 2026-06-23):** el SDK solo expone **PCM crudo del mic (16 kHz mono)**; su traducción/STT vive en su **nube cerrada, sin API pública**. No se puede invocar desde una app de terceros. Su app es más precisa por **pipeline integrado STT+traducción co-afinado + 4 mics direccionales con filtrado de ruido**; nosotros pegamos Deepgram + Google Translate v2 genéricos. Estrategia: igualar su comportamiento (sin saltos/descartes) y **ganarles en el anclaje** (ya hecho). Fuente: zenn.dev/bigdra (SDK feature verification).
 
-**Problemas abiertos (próxima sesión, sesión 6) — PRIORIDAD:**
-1. **La primera frase tarda demasiado en aparecer.** Con `endpointing=300` + acumulación, la primera pintada espera a la pausa / `speech_final`. Explorar: pintar antes (¿`interim_results` para el primer paint?, endpointing más bajo solo en el arranque, o mostrar parcial mientras Google traduce).
-2. **Párrafos de hasta 4 líneas — demasiado largo.** Causa directa: `FLUSH_MAX_WORDS=24` + `endpointing=300` generan frases largas. Bajar el cap (¿12–15 palabras ≈ 2 líneas?) y/o partir oraciones largas, **sin** volver a cortar a media idea ni reintroducir skipping. Trade-off a calibrar con uso real.
-3. **Calibrar dwell/catch-up con uso real** contra la tabla de abajo (`PHRASE_*`, `PHRASE_CATCHUP_MS`). Si el atraso molesta con habla rápida, bajar `PHRASE_CATCHUP_MS`.
+**Hecho sesión 6 (build v15, validado en gafas reales 2026-06-25):**
+- ✅ **Primera frase lenta — RESUELTO.** Causa: el buffer solo se vaciaba en `speech_final` (fin de toda la idea). Fix en `src/asr/stt.ts`: en cada `is_final` se vacían **las oraciones que ya cerraron** (`flushCompleteSentences` + `splitSentences`), partiendo en `. ! ? …` solo cuando la puntuación va al final o seguida de espacio (no parte decimales tipo `2.5`). La primera oración pinta apenas Deepgram la finaliza, sin esperar la pausa final. El fragmento incompleto sobrante se vacía en `speech_final`/`UtteranceEnd`/tope 24 palabras como antes. `onUtterance` ahora dispara **por oración**, no por utterance. Bonus: ataca de paso el #2 (párrafos largos → se parten en oraciones). BLE: ~1 escritura por oración (antes 1 por utterance), siempre en gaps — validado sin freeze.
+  - Limitación cosmética conocida: abreviaturas con punto+espacio (`Sr. García`) se parten en `"Sr."` + resto. Raro; `smart_format` suele evitarlo. Afinar con diccionario de abreviaturas solo si molesta en uso real.
+
+**Problemas abiertos (próxima sesión) — PRIORIDAD:**
+1. **Párrafos largos — verificar si sigue pasando.** El split por oración (sesión 6) debería haberlo mitigado. Si aún aparecen 3-4 líneas (oraciones largas de una sola idea), considerar bajar `FLUSH_MAX_WORDS` (¿12–15 ≈ 2 líneas?) o partir oraciones muy largas en cláusulas, **sin** cortar a media idea.
+2. **Calibrar dwell/catch-up con uso real** contra la tabla de abajo (`PHRASE_*`, `PHRASE_CATCHUP_MS`). Si el atraso molesta con habla rápida, bajar `PHRASE_CATCHUP_MS`.
 
 **Tabla de tiempos de lectura objetivo (referencia del usuario, 2026-06-22):**
 

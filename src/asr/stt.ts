@@ -11,9 +11,11 @@
 //                      transcription word-by-word (mode 2) — the screen
 //                      shows whatever word the speaker is on right now.
 //
-//   onUtterance(u)   — fires once per finished utterance with the full
-//                      punctuated transcript and detected language.
-//                      Used by translation modes (1, 3).
+//   onUtterance(u)   — fires once per finished SENTENCE with its punctuated
+//                      transcript and detected language. A long utterance is
+//                      emitted sentence-by-sentence as each one closes (at
+//                      `. ! ? …`), so the first sentence paints without waiting
+//                      for the speaker to fully stop. Used by both modes.
 //
 //   onStatus / onError — connection + error reporting for the UI chip.
 //
@@ -89,14 +91,50 @@ export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
   // (cutting at 8 words hurt translation quality and readability).
   const FLUSH_MAX_WORDS = 24
 
-  // Emit the accumulated utterance once and reset. Guarded so a stray flush
-  // (e.g. an UtteranceEnd arriving after speech_final already cleared the
-  // buffer) does nothing instead of emitting an empty/duplicate phrase.
+  // Emit the WHOLE accumulated buffer as one phrase and reset. Used for the
+  // trailing fragment that has no sentence-ending punctuation (e.g. the speaker
+  // stops mid-clause) on speech_final / UtteranceEnd, and for the word-cap
+  // safety net. Guarded so a stray flush (e.g. an UtteranceEnd after the buffer
+  // was already cleared) does nothing instead of emitting an empty phrase.
   function flushUtterance() {
     const transcript = finalBuffer.trim()
     if (!transcript) return
     cb.onUtterance?.({ transcript, detectedLang: lastLang })
     finalBuffer = ''
+    lastTrailingWord = ''
+  }
+
+  // Split text into complete sentences plus a trailing remainder. A punctuation
+  // mark counts as a sentence end only when it's at the end of the text or
+  // followed by whitespace — so decimals ("12.5") and abbreviations ("Sr.")
+  // mid-token don't trigger a false split.
+  function splitSentences(text: string): { sentences: string[]; remainder: string } {
+    const sentences: string[] = []
+    let start = 0
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]
+      if (c === '.' || c === '!' || c === '?' || c === '…') {
+        const next = text[i + 1]
+        if (next === undefined || /\s/.test(next)) {
+          const s = text.slice(start, i + 1).trim()
+          if (s) sentences.push(s)
+          start = i + 1
+        }
+      }
+    }
+    return { sentences, remainder: text.slice(start) }
+  }
+
+  // Emit every COMPLETE sentence sitting in the buffer right now and keep the
+  // trailing incomplete fragment for later. Called on each is_final so the
+  // first sentence paints as soon as it closes (faster first paint) and long
+  // speech is broken into sentence-sized phrases (shorter paragraphs) — without
+  // ever cutting mid-idea, since we only split at terminal punctuation.
+  function flushCompleteSentences() {
+    const { sentences, remainder } = splitSentences(finalBuffer)
+    if (sentences.length === 0) return
+    for (const s of sentences) cb.onUtterance?.({ transcript: s, detectedLang: lastLang })
+    finalBuffer = remainder.replace(/^\s+/, '')
     lastTrailingWord = ''
   }
 
@@ -162,15 +200,19 @@ export function startSttStream(apiKey: string, cb: SttCallbacks): SttClient {
     if (isFinal) {
       finalBuffer = finalBuffer ? `${finalBuffer} ${transcript}` : transcript
       lastLang = detectedLang
-      // Long monologue with no pause: flush once the buffer reaches a
-      // glance-sized phrase instead of waiting for speech_final.
+      // Paint any sentence that just closed right away — don't wait for the
+      // speaker to fully stop (that was the slow first paint). Whatever is left
+      // is an incomplete trailing fragment that stays buffered.
+      flushCompleteSentences()
+      // Long monologue with no sentence break: flush the leftover fragment once
+      // it reaches a glance-sized length instead of waiting for speech_final.
       const wordCount = finalBuffer.split(/\s+/).filter(Boolean).length
       if (wordCount >= FLUSH_MAX_WORDS) flushUtterance()
     }
 
     // speech_final marks the end of the utterance via silence — flush the
-    // accumulated buffer (which may span several is_final segments). A no-op
-    // if the word-cap above already flushed it.
+    // trailing fragment (a clause with no terminal punctuation). A no-op if the
+    // sentence flush or word-cap above already emptied the buffer.
     if (speechFinal) flushUtterance()
   }
 
