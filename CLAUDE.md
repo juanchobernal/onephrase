@@ -32,7 +32,8 @@ onephrase/
 │   ├── main.ts              # bridge init, mode state, ruteo STT→traducir→render, manejo de eventos
 │   ├── modes.ts             # tipo Mode, lista MODES[], labels (HTML + glasses uppercase), nextMode(), isTranslationMode()
 │   ├── glasses-render.ts    # GlassesStage (debounced textContainerUpgrade); formatAnchored (frases ancladas arriba-izq), formatCenteredWord/Sentence, formatMenu (menú de reposo 1 línea)
-│   ├── ui.ts                # UI del teléfono: selector 2 modos, chip idioma (auto→lang, rojo en error), boards transcripción/traducción
+│   ├── ui.ts                # UI del teléfono: selector 2 modos, chip idioma fuente (`EN →`, rojo en error), desplegable idioma destino (deshab. en transcripción), boards transcripción/traducción
+│   ├── langs.ts             # Lista de idiomas destino (TARGET_LANGS, códigos Google v2 + etiquetas ES), validación, default 'es'
 │   └── asr/
 │       ├── stt.ts           # Cliente Deepgram WS, emite onLatestWord (mirror en teléfono) + onUtterance (dispara ambos modos)
 │       └── translate.ts     # Google Translate v2 con cache in-memory
@@ -70,11 +71,11 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 | `PHRASE_MIN_MS` / `PHRASE_MAX_MS` | `src/main.ts` | `1400` / `4500` | Piso/techo del tiempo por frase |
 | `CATCHUP_THRESHOLD` | `src/main.ts` | `2` | Nº de frases en cola toleradas a tiempo de lectura COMPLETO antes de comprimir. Clave: los 2-3 trozos en que se parte una oración NO deben disparar catch-up. |
 | `CATCHUP_FACTOR` / `PHRASE_CATCHUP_FLOOR_MS` | `src/main.ts` | `0.6` / `2000` | Ante atraso real (`>CATCHUP_THRESHOLD` en cola) el dwell = `max(floor, dwell×factor)`. **NO se descartan frases** (no-skip); se comprime pero nunca por debajo del piso legible. |
-| `IDLE_CLEAR_MS` | `src/main.ts` | `20000` | Silencio tras el cual la pantalla vuelve al menú de reposo (`enterMenu`) |
+| `IDLE_CLEAR_MS` | `src/main.ts` | `15000` | Silencio tras el cual la pantalla vuelve al menú de reposo (`enterMenu`) |
 | `BLINK_MS` | `src/main.ts` | `800` | Periodo de parpadeo del "OP" en el menú de reposo |
 | `FLUSH_MAX_WORDS` | `src/asr/stt.ts` | `24` | Red de seguridad: corta el fragmento sin puntuación terminal al llegar a N palabras (evita blob). Desde v15 las frases se vacían por **oración** (`flushCompleteSentences`), así que este tope solo aplica a monólogos sin `. ! ?`. |
-| `TARGET_LANG` | `src/main.ts` | `'es'` | Idioma destino para traducción. |
-| `BUILD` | `src/main.ts` | `'v17'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
+| `currentTargetLang` / `DEFAULT_TARGET_LANG` | `src/main.ts` / `src/langs.ts` | `'es'` | Idioma destino. Ya **no es hardcoded**: se elige en el desplegable del teléfono (v18), persiste en `onephrase:targetLang`. Lista de idiomas en `src/langs.ts` (`TARGET_LANGS`, incl. árabe `ar`). |
+| `BUILD` | `src/main.ts` | `'v19'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
 | `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `300` | ms de silencio para cerrar frase en **oración natural**. Subió de 150 (ya no fragmentamos para evitar skips — eso lo resuelve la acumulación + no-drop). **Modelo real = `nova-3` + `language=multi`**. |
 | `DEBOUNCE_MS` | `src/glasses-render.ts` | `120` | Debounce para `textContainerUpgrade` (la cola BLE es lenta — bajarlo causa lag). |
 
@@ -89,6 +90,8 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 4. **Cancelar traducciones obsoletas**: cuando llega una nueva utterance mientras hay una traducción en vuelo, `pendingUtteranceId` se incrementa. Si la traducción anterior resuelve después, su `myId !== pendingUtteranceId` y se descarta (no clobber).
 
 5. **Switch de modo limpia drip queue**: cambiar modo en mitad de un drip de palabras (modo 1) drena la cola, cancela el timer, e invalida traducciones en vuelo. Esto evita ver palabras del modo anterior aparecer en el nuevo.
+
+6. **⚠️ `bridge.getLocalStorage` de una llave NUNCA guardada SE CUELGA en el dispositivo real (no en el simulador del Mac).** Confirmado v18→v19 (2026-06-25): añadir `await bridge.getLocalStorage('onephrase:targetLang')` (llave nueva, nunca seteada) **congeló todo el arranque** en las gafas — sin mic, sin STT, no transcribía ni traducía — pero en el simulador del Mac funcionaba (ahí devuelve `null` al instante). Un `try/catch` NO basta: el promise no rechaza, **nunca se settlea**. Fix: `loadStored(key)` corre `getLocalStorage` contra un `Promise.race` con timeout de 1.5s → si se cuelga, sigue con el default. **Regla: toda lectura de `getLocalStorage` al arranque debe ir con timeout.** Síntoma diagnóstico clave: "funciona en el Mac, falla en el dispositivo" + arranque que no llega al mic.
 
 ## Decisión de despliegue (2026-06-18)
 
@@ -176,7 +179,7 @@ El "Developer Center" / "Scan QR" **NO aparece en la app iOS** hasta activar Dev
 
 - [ ] Probar latencia real del modo 1 (translate-word): acumula Deepgram utterance (~1 s endpointing) + Google translate (~200-400 ms) + drip (350 ms × N palabras). Si se siente lento, considerar bajar `WORD_DRIP_MS` a 250 ms o iniciar drip cuando llegue la primera mitad de la frase.
 - [ ] Pensar si quieres que el `--asr` config de `app.json` también pida permiso `phone-microphone` como fallback en caso de que el mic de las gafas falle.
-- [ ] Añadir selector de idioma destino en el teléfono (hoy `TARGET_LANG='es'` hardcoded en `main.ts`).
+- [x] **Selector de idioma destino en el teléfono — HECHO (v18/v19, 2026-06-25).** Desplegable en la cabecera (10 idiomas incl. árabe), persiste en `onephrase:targetLang`, etiqueta del board dinámica, deshabilitado en transcripción, limpia cola al cambiar. ⚠️ **Árabe (`ar`) es RTL y el render de gafas es LTR — sin verificar a fondo en hardware;** puede salir con alineación/orden raros o sin glifos. Si molesta, restringirlo al board del teléfono o quitarlo.
 - [ ] Si Deepgram queda costoso con uso real (créditos gratis se agotan), evaluar OpenAI Whisper streaming o un STT self-hosted en el Pi de Fredy como backend.
 
 ## Tests manuales pasados en la sesión inicial (2026-06-18)

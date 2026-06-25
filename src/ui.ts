@@ -1,24 +1,37 @@
 import { MODES, MODE_LABELS, type Mode } from './modes'
+import { TARGET_LANGS } from './langs'
 
 type Status = 'connecting' | 'listening' | 'error'
 
 let transcriptEl: HTMLDivElement
 let translationEl: HTMLDivElement
+let translationLabelEl: HTMLDivElement
 let langChipEl: HTMLSpanElement
+let targetSelectEl: HTMLSelectElement
 let buildEl: HTMLSpanElement
 let modeButtons: Map<Mode, HTMLButtonElement> = new Map()
 
 let onModeChange: ((m: Mode) => void) | null = null
+let onTargetLangChange: ((code: string) => void) | null = null
 
-export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void) {
+export function mountUi(
+  initialMode: Mode,
+  modeChangeHandler: (m: Mode) => void,
+  initialTargetLang: string,
+  targetLangChangeHandler: (code: string) => void,
+) {
   onModeChange = modeChangeHandler
+  onTargetLangChange = targetLangChangeHandler
   const app = document.querySelector<HTMLDivElement>('#app')!
   app.innerHTML = `
     <main class="panel">
       <header>
         <h1>Onephrase <span id="build" class="build"></span></h1>
         <div class="head-right">
-          <span id="lang" class="chip chip-muted">auto → —</span>
+          <span id="lang" class="chip chip-muted">— →</span>
+          <select id="target-lang" class="lang-select" aria-label="Idioma de traducción">
+            ${TARGET_LANGS.map(l => `<option value="${l.code}">${l.label}</option>`).join('')}
+          </select>
         </div>
       </header>
       <section class="modes" role="radiogroup" aria-label="Modo">
@@ -32,7 +45,7 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
           <div id="transcript" class="board-body" aria-live="polite"></div>
         </div>
         <div class="board">
-          <div class="board-label">Traducción (ES)</div>
+          <div id="translation-label" class="board-label">Traducción (ES)</div>
           <div id="translation" class="board-body" aria-live="polite"></div>
         </div>
       </section>
@@ -41,8 +54,13 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
   `
   transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
   translationEl = app.querySelector<HTMLDivElement>('#translation')!
+  translationLabelEl = app.querySelector<HTMLDivElement>('#translation-label')!
   langChipEl = app.querySelector<HTMLSpanElement>('#lang')!
+  targetSelectEl = app.querySelector<HTMLSelectElement>('#target-lang')!
   buildEl = app.querySelector<HTMLSpanElement>('#build')!
+
+  targetSelectEl.value = initialTargetLang
+  targetSelectEl.addEventListener('change', () => onTargetLangChange?.(targetSelectEl.value))
 
   for (const btn of app.querySelectorAll<HTMLButtonElement>('.mode-btn')) {
     const m = btn.dataset.mode as Mode
@@ -50,7 +68,15 @@ export function mountUi(initialMode: Mode, modeChangeHandler: (m: Mode) => void)
     btn.addEventListener('click', () => onModeChange?.(m))
   }
   setActiveMode(initialMode)
+  setTargetLang(initialTargetLang) // sync the board label to the persisted choice
   injectStyles()
+}
+
+// Reflect the chosen target language: keep the dropdown in sync (e.g. when set
+// programmatically) and update the translation board label.
+export function setTargetLang(code: string) {
+  if (targetSelectEl && targetSelectEl.value !== code) targetSelectEl.value = code
+  if (translationLabelEl) translationLabelEl.textContent = `Traducción (${code.toUpperCase()})`
 }
 
 // Build/version tag next to the title — lets you confirm which bundle loaded
@@ -65,6 +91,8 @@ export function setActiveMode(mode: Mode) {
     btn.classList.toggle('mode-btn-active', active)
     btn.setAttribute('aria-checked', active ? 'true' : 'false')
   }
+  // The target-language picker only applies when translating.
+  if (targetSelectEl) targetSelectEl.disabled = mode !== 'translate'
 }
 
 // The single header chip shows the detected language ("auto → es"). Errors are
@@ -85,7 +113,9 @@ export function setDetectedLanguage(lang: string) {
   if (!langChipEl) return
   langChipEl.classList.remove('chip-error')
   langChipEl.classList.add('chip-muted')
-  langChipEl.textContent = `auto → ${lang}`
+  // Detected SOURCE language, with an arrow pointing at the target dropdown
+  // beside it: "EN → [ Español ▾ ]".
+  langChipEl.textContent = `${lang} →`
 }
 
 export function setTranscript(text: string) {
@@ -113,6 +143,13 @@ function injectStyles() {
       border: 1px solid #3E3E3E; color: #A7A7A7; letter-spacing: 0.04em; text-transform: uppercase; }
     .chip-muted { background: #2E2E2E; }
     .chip-error { background: rgba(255,69,58,0.12); border-color: #FF453A; color: #FF453A; text-transform: none; }
+    .lang-select { appearance: none; -webkit-appearance: none; cursor: pointer;
+      background: #2E2E2E; color: #E5E5E5; border: 1px solid #3E3E3E;
+      border-radius: 999px; padding: 4px 26px 4px 11px; font-size: 12px;
+      letter-spacing: 0.02em; line-height: 1.2;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23A7A7A7' stroke-width='1.5'/></svg>");
+      background-repeat: no-repeat; background-position: right 9px center; }
+    .lang-select:disabled { opacity: 0.4; cursor: not-allowed; }
     .build { font-size: 12px; font-weight: 400; color: #FF9F0A; letter-spacing: 0.02em; }
     .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
     .mode-btn { appearance: none; cursor: pointer; padding: 12px 10px;

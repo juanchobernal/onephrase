@@ -16,11 +16,13 @@ import {
   CONTAINER_NAME,
 } from './glasses-render'
 import { MODES, MODE_MENU_LABELS, nextMode, type Mode } from './modes'
+import { DEFAULT_TARGET_LANG, isValidTargetLang } from './langs'
 import {
   mountUi,
   setStatus,
   setActiveMode,
   setDetectedLanguage,
+  setTargetLang,
   setTranscript,
   setTranslation,
   setBuildInfo,
@@ -28,10 +30,11 @@ import {
 
 // Bump this with every change and keep it in sync with the ?v=N in the QR URL,
 // so the app shows which bundle is actually loaded (cache-bust verification).
-const BUILD = 'v17'
+const BUILD = 'v19'
 
-const TARGET_LANG = 'es'
+let currentTargetLang = DEFAULT_TARGET_LANG
 const MODE_STORAGE_KEY = 'onephrase:mode'
+const TARGET_LANG_STORAGE_KEY = 'onephrase:targetLang'
 const BLINK_MS = 800               // "OP" blink period in the idle menu
 
 const DEEPGRAM_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY as string
@@ -60,7 +63,7 @@ const PHRASE_MAX_MS = 4500       // ceiling (a very long phrase)
 const CATCHUP_THRESHOLD = 2      // queued-behind count tolerated at full reading speed
 const CATCHUP_FACTOR = 0.6       // compression applied to dwell when far behind
 const PHRASE_CATCHUP_FLOOR_MS = 2000 // minimum readable exposure even when draining a backlog
-const IDLE_CLEAR_MS = 20000      // wipe the glasses after this long with no new phrase
+const IDLE_CLEAR_MS = 15000      // wipe the glasses after this long with no new phrase
 let phraseQueue: string[] = []
 let phraseTimer: number | null = null
 let idleClearTimer: number | null = null
@@ -69,16 +72,27 @@ let translateChain: Promise<void> = Promise.resolve() // serializes translations
 
 const bridge = await waitForEvenAppBridge()
 
-// Persisted mode load — happens before the UI mounts so the picker shows
-// the right active button on first paint.
-try {
-  const stored = await bridge.getLocalStorage(MODE_STORAGE_KEY)
-  if (stored && (MODES as string[]).includes(stored)) currentMode = stored as Mode
-} catch {
-  // ignore — fall back to default mode
+// Read a persisted value WITHOUT ever blocking startup. On the real glasses SDK
+// `getLocalStorage` for a key that was never set can hang (the promise never
+// settles) — which froze the whole init (no mic, no STT) in v18 when we added a
+// brand-new key. Race it against a timeout so a hang (or rejection) just falls
+// back to the default and the app keeps booting.
+function loadStored(key: string): Promise<string | null> {
+  return Promise.race([
+    bridge.getLocalStorage(key).catch(() => null),
+    new Promise<null>(resolve => window.setTimeout(() => resolve(null), 1500)),
+  ])
 }
 
-mountUi(currentMode, m => switchMode(m, 'phone'))
+// Persisted mode + target language — loaded before the UI mounts so the picker
+// shows the right active button / language on first paint.
+const storedMode = await loadStored(MODE_STORAGE_KEY)
+if (storedMode && (MODES as string[]).includes(storedMode)) currentMode = storedMode as Mode
+
+const storedLang = await loadStored(TARGET_LANG_STORAGE_KEY)
+if (storedLang && isValidTargetLang(storedLang)) currentTargetLang = storedLang
+
+mountUi(currentMode, m => switchMode(m, 'phone'), currentTargetLang, switchTargetLang)
 setBuildInfo(BUILD)
 
 if (!DEEPGRAM_KEY) {
@@ -173,7 +187,7 @@ function handleUtterance(transcript: string, detectedLang: string) {
   translateChain = translateChain.then(async () => {
     if (gen !== phraseGen) return // mode switched while queued — drop
     try {
-      const translated = await translate(GOOGLE_KEY, text, TARGET_LANG)
+      const translated = await translate(GOOGLE_KEY, text, currentTargetLang)
       if (gen !== phraseGen) return
       setTranslation(translated)
       enqueuePhrase(translated)
@@ -290,6 +304,25 @@ function switchMode(next: Mode, source: 'phone' | 'glasses') {
   // glasses (replaces the old transient mode banner). The next phrase exits it.
   enterMenu()
   console.log(`mode → ${next} (via ${source})`)
+}
+
+// Target language picked on the phone. Persisted like the mode. Switching mid-
+// stream drops queued / in-flight phrases (translated to the OLD language) and
+// returns to the idle menu, mirroring a mode switch, so no stale-language text
+// lingers. Only meaningful in translate mode (the picker is disabled otherwise).
+function switchTargetLang(code: string) {
+  if (code === currentTargetLang || !isValidTargetLang(code)) return
+  currentTargetLang = code
+  bridge.setLocalStorage(TARGET_LANG_STORAGE_KEY, code).catch(() => {})
+  setTargetLang(code)
+  phraseGen++
+  phraseQueue = []
+  if (phraseTimer !== null) {
+    clearTimeout(phraseTimer)
+    phraseTimer = null
+  }
+  enterMenu()
+  console.log(`target lang → ${code}`)
 }
 
 // ─── Event routing ────────────────────────────────────────────────────
