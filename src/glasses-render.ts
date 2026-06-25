@@ -70,8 +70,9 @@ export function formatCenteredSentence(sentence: string, upper = true): string {
   return `${topPad}${padded}`
 }
 
-// Idle menu: a single horizontal line, "OP >Traductor  Transcripción", with a
-// ">" right before the active mode. `headerVisible` drives the blinking "OP":
+// Idle menu: a single horizontal line, "op [translator] transcription", all
+// lowercase with the active mode in [brackets]. `headerVisible` drives the
+// blinking "OP":
 // when false the slot is filled with spaces so the line keeps the same width
 // and stays centered (no horizontal jitter as it blinks).
 export interface MenuItem {
@@ -80,12 +81,23 @@ export interface MenuItem {
 }
 
 const MENU_HEADER = 'OP'
+// Blank stand-in for "OP" while it blinks off. Must match "OP"'s PIXEL width,
+// not its character count: "OP" is ~32px but two spaces are only ~10px, which
+// is what made the rest of the line (Translator / Transcription) jump sideways
+// on every blink. Space-granularity leaves at most ~half a space of residual.
+const MENU_HEADER_BLANK = ' '.repeat(Math.round(getTextWidth(MENU_HEADER) / SPACE_W))
 
 export function formatMenu(items: MenuItem[], headerVisible: boolean): string {
-  const tail = items.map(i => (i.active ? '>' : '') + i.label).join('  ')
-  // Always center on the header-visible width so the line doesn't move on blink.
+  // Everything lowercase; the active mode is marked with [brackets]. The G2
+  // text API has no per-word color/brightness (only images support grayscale,
+  // impractical for a blinking menu and capped at 288px wide), so a bracket
+  // marker is the cleanest active cue achievable in plain text.
+  const tail = items
+    .map(i => (i.active ? `[${i.label.toLowerCase()}]` : i.label.toLowerCase()))
+    .join('   ')
+  // Center on the header-VISIBLE width so the line doesn't recenter on blink.
   const leftPad = spacesForLeftPad(getTextWidth(`${MENU_HEADER} ${tail}`), CANVAS_W)
-  const head = headerVisible ? MENU_HEADER : ' '.repeat(MENU_HEADER.length)
+  const head = headerVisible ? MENU_HEADER : MENU_HEADER_BLANK
   const topPad = blankLinesForVerticalPad(LINE_H, CANVAS_H)
   return `${topPad}${leftPad}${head} ${tail}`
 }

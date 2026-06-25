@@ -9,7 +9,7 @@ App de traducción para **gafas Even Realities G2** que escucha por el micrófon
 1. **`translate`** — Auto-detect → ES. Frase completa traducida, centrada (wrap-line si no cabe), reemplaza al llegar la siguiente. Default al iniciar.
 2. **`transcribe`** — Auto-detect (sin traducir). Frase completa en el idioma original, centrada.
 
-Single-tap = cicla 1→2→1. Double-tap = salir con diálogo. Modo activo persiste vía `bridge.setLocalStorage`. En reposo (al inicio y tras 20 s de silencio) se muestra un **menú de una línea `OP >Traductor  Transcripción`** con "OP" parpadeando y `>` antes del modo activo; el tap alterna el modo y refleja el cambio en el menú.
+Single-tap = cicla 1→2→1. Double-tap = salir con diálogo. Modo activo persiste vía `bridge.setLocalStorage`. En reposo (al inicio y tras 15 s de silencio) se muestra un **menú de una línea en inglés `op [translator] transcription`** (todo minúsculas, el activo entre `[corchetes]`) con "OP" parpadeando; el tap alterna el modo y refleja el cambio en el menú. La UI del teléfono también está en inglés (v21).
 
 > **Por qué solo frases (no palabra-a-palabra):** los modos `*-word` originales (drip de 350 ms) **congelaban el display en hardware real**. Causa raíz confirmada (2026-06-22): el audio del mic sube por el mismo enlace **BLE** que las escrituras al display; escribir *mientras* se habla satura el BLE y cuelga las escrituras. Escribir **al pausar** (fin de utterance, cuando el audio baja) lo resuelve. Ver detalle en la sección de bug resuelto abajo.
 
@@ -74,8 +74,8 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 | `IDLE_CLEAR_MS` | `src/main.ts` | `15000` | Silencio tras el cual la pantalla vuelve al menú de reposo (`enterMenu`) |
 | `BLINK_MS` | `src/main.ts` | `800` | Periodo de parpadeo del "OP" en el menú de reposo |
 | `FLUSH_MAX_WORDS` | `src/asr/stt.ts` | `24` | Red de seguridad: corta el fragmento sin puntuación terminal al llegar a N palabras (evita blob). Desde v15 las frases se vacían por **oración** (`flushCompleteSentences`), así que este tope solo aplica a monólogos sin `. ! ?`. |
-| `currentTargetLang` / `DEFAULT_TARGET_LANG` | `src/main.ts` / `src/langs.ts` | `'es'` | Idioma destino. Ya **no es hardcoded**: se elige en el desplegable del teléfono (v18), persiste en `onephrase:targetLang`. Lista de idiomas en `src/langs.ts` (`TARGET_LANGS`, incl. árabe `ar`). |
-| `BUILD` | `src/main.ts` | `'v19'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
+| `currentTargetLang` / `DEFAULT_TARGET_LANG` | `src/main.ts` / `src/langs.ts` | `'es'` | Idioma destino. Ya **no es hardcoded**: se elige en el desplegable del teléfono (v18), persiste en `onephrase:targetLang`. Lista de 9 idiomas en `src/langs.ts` (`TARGET_LANGS`, nombres en inglés; orden: es·en·it·fr·de·pt·zh·ja·ko). |
+| `BUILD` | `src/main.ts` | `'v21'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
 | `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `300` | ms de silencio para cerrar frase en **oración natural**. Subió de 150 (ya no fragmentamos para evitar skips — eso lo resuelve la acumulación + no-drop). **Modelo real = `nova-3` + `language=multi`**. |
 | `DEBOUNCE_MS` | `src/glasses-render.ts` | `120` | Debounce para `textContainerUpgrade` (la cola BLE es lenta — bajarlo causa lag). |
 
@@ -179,7 +179,7 @@ El "Developer Center" / "Scan QR" **NO aparece en la app iOS** hasta activar Dev
 
 - [ ] Probar latencia real del modo 1 (translate-word): acumula Deepgram utterance (~1 s endpointing) + Google translate (~200-400 ms) + drip (350 ms × N palabras). Si se siente lento, considerar bajar `WORD_DRIP_MS` a 250 ms o iniciar drip cuando llegue la primera mitad de la frase.
 - [ ] Pensar si quieres que el `--asr` config de `app.json` también pida permiso `phone-microphone` como fallback en caso de que el mic de las gafas falle.
-- [x] **Selector de idioma destino en el teléfono — HECHO (v18/v19, 2026-06-25).** Desplegable en la cabecera (10 idiomas incl. árabe), persiste en `onephrase:targetLang`, etiqueta del board dinámica, deshabilitado en transcripción, limpia cola al cambiar. ⚠️ **Árabe (`ar`) es RTL y el render de gafas es LTR — sin verificar a fondo en hardware;** puede salir con alineación/orden raros o sin glifos. Si molesta, restringirlo al board del teléfono o quitarlo.
+- [x] **Selector de idioma destino en el teléfono — HECHO (v18-v21, 2026-06-25).** Desplegable en la cabecera (9 idiomas, nombres en inglés), persiste en `onephrase:targetLang`, etiqueta del board dinámica, deshabilitado en transcripción, limpia cola al cambiar. El árabe se probó y **se quitó** (RTL no encaja con el render LTR de las gafas). Menú de gafas y UI del teléfono pasados a **inglés** (v20/v21); activo del menú en `[corchetes]` (el G2 no soporta brillo por palabra en texto — solo imágenes Gray4, descartado por carga BLE + límite 288px).
 - [ ] Si Deepgram queda costoso con uso real (créditos gratis se agotan), evaluar OpenAI Whisper streaming o un STT self-hosted en el Pi de Fredy como backend.
 
 ## Tests manuales pasados en la sesión inicial (2026-06-18)

@@ -8,24 +8,25 @@ export type Mode = 'translate' | 'transcribe'
 export const MODES: Mode[] = ['translate', 'transcribe']
 
 export const MODE_LABELS: Record<Mode, string> = {
-  translate: 'traducción · frase',
-  transcribe: 'transcripción · frase',
+  translate: 'translate · phrase',
+  transcribe: 'transcribe · phrase',
 }
 
 // Lowercase labels shown briefly on the glasses when the mode cycles. Rendered
 // with upper=false so they stay lowercase (translated/transcribed content is
 // still uppercased).
 export const MODE_GLASSES_LABELS: Record<Mode, string> = {
-  translate: 'traducción',
-  transcribe: 'transcripción',
+  translate: 'translate',
+  transcribe: 'transcribe',
 }
 
-// Capitalized labels for the idle menu on the glasses (one line per mode, the
-// active one marked). Shown while no phrase is on screen, so the app signals
-// it's still alive and which mode is active.
+// Base labels for the idle menu on the glasses, in ENGLISH (one line, both
+// modes shown). formatMenu() lowercases both and wraps the ACTIVE one in
+// [brackets] — the G2 text API has no per-word brightness, so a bracket marker
+// is the cleanest active cue in plain text.
 export const MODE_MENU_LABELS: Record<Mode, string> = {
-  translate: 'Traductor',
-  transcribe: 'Transcripción',
+  translate: 'Translator',
+  transcribe: 'Transcription',
 }
 
 export function nextMode(current: Mode): Mode {

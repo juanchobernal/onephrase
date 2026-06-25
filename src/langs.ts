@@ -8,16 +8,15 @@ export interface TargetLang {
 }
 
 export const TARGET_LANGS: TargetLang[] = [
-  { code: 'es', label: 'Español' },
-  { code: 'en', label: 'Inglés' },
-  { code: 'fr', label: 'Francés' },
-  { code: 'de', label: 'Alemán' },
-  { code: 'it', label: 'Italiano' },
-  { code: 'pt', label: 'Portugués' },
-  { code: 'zh', label: 'Chino' },
-  { code: 'ja', label: 'Japonés' },
-  { code: 'ko', label: 'Coreano' },
-  { code: 'ar', label: 'Árabe' },
+  { code: 'es', label: 'Spanish' },
+  { code: 'en', label: 'English' },
+  { code: 'it', label: 'Italian' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'zh', label: 'Chinese' },
+  { code: 'ja', label: 'Japanese' },
+  { code: 'ko', label: 'Korean' },
 ]
 
 export const DEFAULT_TARGET_LANG = 'es'

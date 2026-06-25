@@ -29,7 +29,7 @@ export function mountUi(
         <h1>Onephrase <span id="build" class="build"></span></h1>
         <div class="head-right">
           <span id="lang" class="chip chip-muted">— →</span>
-          <select id="target-lang" class="lang-select" aria-label="Idioma de traducción">
+          <select id="target-lang" class="lang-select" aria-label="Translation language">
             ${TARGET_LANGS.map(l => `<option value="${l.code}">${l.label}</option>`).join('')}
           </select>
         </div>
@@ -41,15 +41,15 @@ export function mountUi(
       </section>
       <section class="boards">
         <div class="board">
-          <div class="board-label">Transcripción</div>
+          <div class="board-label">Transcription</div>
           <div id="transcript" class="board-body" aria-live="polite"></div>
         </div>
         <div class="board">
-          <div id="translation-label" class="board-label">Traducción (ES)</div>
+          <div id="translation-label" class="board-label">Translation (ES)</div>
           <div id="translation" class="board-body" aria-live="polite"></div>
         </div>
       </section>
-      <footer>Toca una vez la patilla de las gafas para cambiar de modo · doble toque para salir.</footer>
+      <footer>Single-tap the glasses temple to switch mode · double-tap to exit.</footer>
     </main>
   `
   transcriptEl = app.querySelector<HTMLDivElement>('#transcript')!
@@ -76,7 +76,7 @@ export function mountUi(
 // programmatically) and update the translation board label.
 export function setTargetLang(code: string) {
   if (targetSelectEl && targetSelectEl.value !== code) targetSelectEl.value = code
-  if (translationLabelEl) translationLabelEl.textContent = `Traducción (${code.toUpperCase()})`
+  if (translationLabelEl) translationLabelEl.textContent = `Translation (${code.toUpperCase()})`
 }
 
 // Build/version tag next to the title — lets you confirm which bundle loaded
@@ -114,7 +114,7 @@ export function setDetectedLanguage(lang: string) {
   langChipEl.classList.remove('chip-error')
   langChipEl.classList.add('chip-muted')
   // Detected SOURCE language, with an arrow pointing at the target dropdown
-  // beside it: "EN → [ Español ▾ ]".
+  // beside it: "EN → [ Spanish ▾ ]".
   langChipEl.textContent = `${lang} →`
 }
 

@@ -30,7 +30,7 @@ import {
 
 // Bump this with every change and keep it in sync with the ?v=N in the QR URL,
 // so the app shows which bundle is actually loaded (cache-bust verification).
-const BUILD = 'v19'
+const BUILD = 'v21'
 
 let currentTargetLang = DEFAULT_TARGET_LANG
 const MODE_STORAGE_KEY = 'onephrase:mode'
@@ -96,10 +96,10 @@ mountUi(currentMode, m => switchMode(m, 'phone'), currentTargetLang, switchTarge
 setBuildInfo(BUILD)
 
 if (!DEEPGRAM_KEY) {
-  setStatus('error', 'Falta VITE_DEEPGRAM_API_KEY — copia .env.example a .env.local')
+  setStatus('error', 'Missing VITE_DEEPGRAM_API_KEY — copy .env.example to .env.local')
 }
 if (!GOOGLE_KEY) {
-  setStatus('error', 'Falta VITE_GOOGLE_API_KEY — copia .env.example a .env.local')
+  setStatus('error', 'Missing VITE_GOOGLE_API_KEY — copy .env.example to .env.local')
 }
 
 // One full-canvas container, no padding/border — the renderer pads with
@@ -135,9 +135,9 @@ let stt: ReturnType<typeof startSttStream> | null = null
 try {
   stt = startSttStream(DEEPGRAM_KEY, {
     onStatus(s) {
-      if (s === 'open') setStatus('listening', 'Mic activo · doble toque sale')
-      else if (s === 'connecting') setStatus('connecting', 'Conectando a Deepgram…')
-      else if (s === 'closed') setStatus('error', 'Conexión cerrada')
+      if (s === 'open') setStatus('listening', 'Mic on · double-tap to exit')
+      else if (s === 'connecting') setStatus('connecting', 'Connecting to Deepgram…')
+      else if (s === 'closed') setStatus('error', 'Connection closed')
     },
     onError(err) {
       setStatus('error', `STT: ${(err as Error)?.message ?? err}`)
@@ -151,7 +151,7 @@ try {
     },
   })
 } catch (err) {
-  setStatus('error', (err as Error)?.message ?? 'No pude iniciar el STT')
+  setStatus('error', (err as Error)?.message ?? 'Could not start STT')
   console.error('STT startup failed:', err)
 }
 
@@ -192,7 +192,7 @@ function handleUtterance(transcript: string, detectedLang: string) {
       setTranslation(translated)
       enqueuePhrase(translated)
     } catch (err) {
-      setStatus('error', `Traducción: ${(err as Error)?.message ?? err}`)
+      setStatus('error', `Translation: ${(err as Error)?.message ?? err}`)
       console.error('Translate failed:', err)
     }
   })
