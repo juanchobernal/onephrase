@@ -9,6 +9,7 @@ import { translate } from './asr/translate'
 import {
   GlassesStage,
   formatMenu,
+  chunkForReading,
   CANVAS_W,
   CANVAS_H,
   CONTAINER_ID,
@@ -27,7 +28,7 @@ import {
 
 // Bump this with every change and keep it in sync with the ?v=N in the QR URL,
 // so the app shows which bundle is actually loaded (cache-bust verification).
-const BUILD = 'v15'
+const BUILD = 'v17'
 
 const TARGET_LANG = 'es'
 const MODE_STORAGE_KEY = 'onephrase:mode'
@@ -49,9 +50,16 @@ let blinkTimer: number | null = null
 // sentence-level and spaced, well under the BLE rate that froze the word drip.
 const PHRASE_BASE_MS = 750       // fixed time to notice + start reading
 const PHRASE_PER_WORD_MS = 290   // added per word (calibrated to the user's reading-time table)
-const PHRASE_MIN_MS = 1100       // floor (e.g. a single short word)
+const PHRASE_MIN_MS = 1400       // floor (e.g. a single short word / short fragment)
 const PHRASE_MAX_MS = 4500       // ceiling (a very long phrase)
-const PHRASE_CATCHUP_MS = 800    // brief dwell while phrases are still queued behind (catch up, no drop)
+// Catch-up only engages under a REAL backlog (more than CATCHUP_THRESHOLD
+// phrases still queued). A sentence that splits into 2-3 reading chunks creates
+// a tiny queue that must NOT trigger catch-up — each chunk gets its full reading
+// time. Only when the speaker genuinely outruns the reader do we compress, and
+// even then never below PHRASE_CATCHUP_FLOOR_MS (no flashing past the reader).
+const CATCHUP_THRESHOLD = 2      // queued-behind count tolerated at full reading speed
+const CATCHUP_FACTOR = 0.6       // compression applied to dwell when far behind
+const PHRASE_CATCHUP_FLOOR_MS = 2000 // minimum readable exposure even when draining a backlog
 const IDLE_CLEAR_MS = 20000      // wipe the glasses after this long with no new phrase
 let phraseQueue: string[] = []
 let phraseTimer: number | null = null
@@ -182,7 +190,9 @@ function handleUtterance(transcript: string, detectedLang: string) {
 function enqueuePhrase(text: string) {
   const t = (text || '').trim()
   if (!t) return
-  phraseQueue.push(t)
+  // Break a long phrase into ≤2-line reading chunks (subtitle style) so the
+  // reader never faces a 3-4 line wall. Short phrases pass through as [t].
+  for (const chunk of chunkForReading(t)) phraseQueue.push(chunk)
   // No phrase is ever dropped (that was the "skipping"). When we fall behind,
   // drainPhraseQueue shortens each phrase's dwell to catch up — like the
   // official app, but anchored so the text doesn't jump.
@@ -206,10 +216,14 @@ function drainPhraseQueue() {
   exitMenu() // a phrase replaces the idle menu; stop the blink
   glasses.setAnchoredSentence(next) // fixed top-left origin so the eye stays put
   scheduleIdleClear()
-  // If phrases are still queued behind, we're behind the speaker — show this
-  // one only briefly so the backlog drains and the display stays close to real
-  // time. Only the last phrase (empty queue) gets its full reading time.
-  const ms = phraseQueue.length > 0 ? PHRASE_CATCHUP_MS : dwellMs(next)
+  // Full reading time in normal flow (incl. the 2-3 chunks a sentence splits
+  // into — a small queue is NOT "behind"). Only a real backlog (speaker
+  // outrunning the reader) compresses the dwell, and never below the readable
+  // floor, so nothing ever flashes by faster than it can be read.
+  const ms =
+    phraseQueue.length > CATCHUP_THRESHOLD
+      ? Math.max(PHRASE_CATCHUP_FLOOR_MS, Math.round(dwellMs(next) * CATCHUP_FACTOR))
+      : dwellMs(next)
   phraseTimer = window.setTimeout(drainPhraseQueue, ms)
 }
 

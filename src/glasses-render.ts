@@ -96,14 +96,113 @@ export function formatMenu(items: MenuItem[], headerVisible: boolean): string {
 // put instead of chasing a re-centered block. Natural case (no uppercasing).
 const ANCHOR_TOP_LINES = 1 // constant blank lines above the text (breathing room)
 const ANCHOR_LEFT_SPACES = 2 // constant left margin
+// Usable text width once the fixed left margin is removed — the width every
+// anchored phrase (and the chunker below) wraps against.
+const ANCHOR_USABLE_W = CANVAS_W - ANCHOR_LEFT_SPACES * SPACE_W
 
 export function formatAnchored(sentence: string): string {
   const norm = (sentence || '').trim()
   if (!norm) return ''
   const leftPad = ' '.repeat(ANCHOR_LEFT_SPACES)
-  const usableW = CANVAS_W - ANCHOR_LEFT_SPACES * SPACE_W
-  const lines = greedyWrap(norm, usableW).map(l => leftPad + l)
+  const lines = greedyWrap(norm, ANCHOR_USABLE_W).map(l => leftPad + l)
   return '\n'.repeat(ANCHOR_TOP_LINES) + lines.join('\n')
+}
+
+// ─── Reading-sized chunking ───────────────────────────────────────────────
+// A whole sentence can still wrap to 3-4 lines — too much to glance-read. We
+// break long phrases into ≤MAX_PHRASE_LINES-line chunks at natural boundaries
+// (subtitle style): after a comma/semicolon/colon, or before a conjunction.
+// Only when no boundary fits do we hard-wrap by words. Chunking runs on the
+// FINAL displayed text (after translation), since translation changes length.
+
+const MAX_PHRASE_LINES = 2
+
+// Lowercased words that introduce a clause — soft break points when there's no
+// comma. Spanish first, then a few English ones (auto-detect can yield either).
+const CLAUSE_CONJUNCTIONS = new Set([
+  'y', 'e', 'o', 'u', 'pero', 'porque', 'pues', 'que', 'como', 'cuando',
+  'aunque', 'mientras', 'sino', 'donde', 'quien', 'cuyo',
+  'and', 'or', 'but', 'because', 'that', 'when', 'while', 'if', 'where',
+])
+
+function lineCount(text: string): number {
+  return measureTextWrap(text, ANCHOR_USABLE_W).lineCount
+}
+
+// Strip surrounding punctuation so "y," / "(pero" still match the conjunction set.
+function bareWord(w: string): string {
+  return w.toLowerCase().replace(/[^\p{L}]/gu, '')
+}
+
+// Split into clause-sized segments: start a new segment before a conjunction
+// (never on the first word) and end one after a word carrying , ; or :
+function clauseSegments(text: string): string[] {
+  const words = text.split(/\s+/).filter(Boolean)
+  const segs: string[] = []
+  let cur: string[] = []
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    if (cur.length && i > 0 && CLAUSE_CONJUNCTIONS.has(bareWord(w))) {
+      segs.push(cur.join(' '))
+      cur = []
+    }
+    cur.push(w)
+    if (/[,;:]$/.test(w)) {
+      segs.push(cur.join(' '))
+      cur = []
+    }
+  }
+  if (cur.length) segs.push(cur.join(' '))
+  return segs
+}
+
+// Last resort: pack words greedily into ≤maxLines-line pieces. A single word
+// always fits (it can't exceed the line on its own here).
+function hardWrapWords(text: string, maxLines: number): string[] {
+  const words = text.split(/\s+/).filter(Boolean)
+  const out: string[] = []
+  let cur = ''
+  for (const w of words) {
+    const cand = cur ? `${cur} ${w}` : w
+    if (lineCount(cand) <= maxLines) {
+      cur = cand
+    } else {
+      if (cur) out.push(cur)
+      cur = w
+    }
+  }
+  if (cur) out.push(cur)
+  return out
+}
+
+// Break `text` into chunks each rendering to ≤maxLines lines. Returns [text]
+// unchanged when it already fits.
+export function chunkForReading(text: string, maxLines = MAX_PHRASE_LINES): string[] {
+  const norm = (text || '').trim()
+  if (!norm) return []
+  if (lineCount(norm) <= maxLines) return [norm]
+
+  const chunks: string[] = []
+  let cur = ''
+  for (const seg of clauseSegments(norm)) {
+    const cand = cur ? `${cur} ${seg}` : seg
+    if (lineCount(cand) <= maxLines) {
+      cur = cand
+      continue
+    }
+    if (cur) {
+      chunks.push(cur)
+      cur = ''
+    }
+    // The segment alone may still overflow (a long clause with no inner break).
+    if (lineCount(seg) > maxLines) {
+      chunks.push(...hardWrapWords(seg, maxLines))
+    } else {
+      cur = seg
+    }
+  }
+  if (cur) chunks.push(cur)
+  return chunks
 }
 
 function greedyWrap(text: string, maxW: number): string[] {

@@ -67,13 +67,14 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 |---|---|---|---|
 | `PHRASE_BASE_MS` | `src/main.ts` | `750` | Tiempo base por frase (cola con catch-up) |
 | `PHRASE_PER_WORD_MS` | `src/main.ts` | `290` | ms añadidos por palabra (calibrado con la tabla de lectura del usuario) |
-| `PHRASE_MIN_MS` / `PHRASE_MAX_MS` | `src/main.ts` | `1100` / `4500` | Piso/techo del tiempo por frase |
-| `PHRASE_CATCHUP_MS` | `src/main.ts` | `800` | Dwell corto cuando hay frases en cola detrás. **NO se descartan frases** (no-skip); cuando va atrás se acorta el dwell para alcanzar. |
+| `PHRASE_MIN_MS` / `PHRASE_MAX_MS` | `src/main.ts` | `1400` / `4500` | Piso/techo del tiempo por frase |
+| `CATCHUP_THRESHOLD` | `src/main.ts` | `2` | Nº de frases en cola toleradas a tiempo de lectura COMPLETO antes de comprimir. Clave: los 2-3 trozos en que se parte una oración NO deben disparar catch-up. |
+| `CATCHUP_FACTOR` / `PHRASE_CATCHUP_FLOOR_MS` | `src/main.ts` | `0.6` / `2000` | Ante atraso real (`>CATCHUP_THRESHOLD` en cola) el dwell = `max(floor, dwell×factor)`. **NO se descartan frases** (no-skip); se comprime pero nunca por debajo del piso legible. |
 | `IDLE_CLEAR_MS` | `src/main.ts` | `20000` | Silencio tras el cual la pantalla vuelve al menú de reposo (`enterMenu`) |
 | `BLINK_MS` | `src/main.ts` | `800` | Periodo de parpadeo del "OP" en el menú de reposo |
 | `FLUSH_MAX_WORDS` | `src/asr/stt.ts` | `24` | Red de seguridad: corta el fragmento sin puntuación terminal al llegar a N palabras (evita blob). Desde v15 las frases se vacían por **oración** (`flushCompleteSentences`), así que este tope solo aplica a monólogos sin `. ! ?`. |
 | `TARGET_LANG` | `src/main.ts` | `'es'` | Idioma destino para traducción. |
-| `BUILD` | `src/main.ts` | `'v15'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
+| `BUILD` | `src/main.ts` | `'v17'` | Etiqueta de versión en el header. **Subir con cada cambio + sincronizar con el `?v=N` del QR** para verificar que cargó el bundle nuevo. |
 | `endpointing` (en `DEEPGRAM_URL`) | `src/asr/stt.ts` | `300` | ms de silencio para cerrar frase en **oración natural**. Subió de 150 (ya no fragmentamos para evitar skips — eso lo resuelve la acumulación + no-drop). **Modelo real = `nova-3` + `language=multi`**. |
 | `DEBOUNCE_MS` | `src/glasses-render.ts` | `120` | Debounce para `textContainerUpgrade` (la cola BLE es lenta — bajarlo causa lag). |
 
@@ -114,9 +115,11 @@ npx evenhub pack   # genera el .ehpk, se carga desde la app Even Hub como app lo
 - ✅ **Primera frase lenta — RESUELTO.** Causa: el buffer solo se vaciaba en `speech_final` (fin de toda la idea). Fix en `src/asr/stt.ts`: en cada `is_final` se vacían **las oraciones que ya cerraron** (`flushCompleteSentences` + `splitSentences`), partiendo en `. ! ? …` solo cuando la puntuación va al final o seguida de espacio (no parte decimales tipo `2.5`). La primera oración pinta apenas Deepgram la finaliza, sin esperar la pausa final. El fragmento incompleto sobrante se vacía en `speech_final`/`UtteranceEnd`/tope 24 palabras como antes. `onUtterance` ahora dispara **por oración**, no por utterance. Bonus: ataca de paso el #2 (párrafos largos → se parten en oraciones). BLE: ~1 escritura por oración (antes 1 por utterance), siempre en gaps — validado sin freeze.
   - Limitación cosmética conocida: abreviaturas con punto+espacio (`Sr. García`) se parten en `"Sr."` + resto. Raro; `smart_format` suele evitarlo. Afinar con diccionario de abreviaturas solo si molesta en uso real.
 
-**Problemas abiertos (próxima sesión) — PRIORIDAD:**
-1. **Párrafos largos — verificar si sigue pasando.** El split por oración (sesión 6) debería haberlo mitigado. Si aún aparecen 3-4 líneas (oraciones largas de una sola idea), considerar bajar `FLUSH_MAX_WORDS` (¿12–15 ≈ 2 líneas?) o partir oraciones muy largas en cláusulas, **sin** cortar a media idea.
-2. **Calibrar dwell/catch-up con uso real** contra la tabla de abajo (`PHRASE_*`, `PHRASE_CATCHUP_MS`). Si el atraso molesta con habla rápida, bajar `PHRASE_CATCHUP_MS`.
+- ✅ **Párrafos de 3-4 líneas — RESUELTO (build v16/v17, validado en gafas 2026-06-25).** El split por oración no bastaba: una oración larga de una sola idea (sin punto interno) salía entera = 3-4 líneas. Fix `chunkForReading()` en `src/glasses-render.ts`: parte cualquier frase a mostrar en **trozos de ≤2 líneas** (medido con `measureTextWrap` contra `ANCHOR_USABLE_W=566px`), cortando en cláusula (`, ; :` o antes de conjunción del set `CLAUSE_CONJUNCTIONS`), con corte duro por palabras como último recurso. Corre sobre el **texto final ya traducido** (`enqueuePhrase` en `main.ts`), porque la traducción cambia el largo. No parte decimales.
+- ✅ **Saltos rápidos entre trozos/frases — RESUELTO (build v17).** El chunking metía backlog artificial: al mostrar el trozo 1 ya había trozo 2 en cola → el catch-up lo trataba como "atrasado" y lo apuraba (no se alcanzaba a leer). Fix en `drainPhraseQueue`: el catch-up **solo** comprime ante atraso REAL (`phraseQueue.length > CATCHUP_THRESHOLD=2`); el flujo normal (incl. los 2-3 trozos de una oración) recibe **tiempo de lectura completo** (`dwellMs`). Comprimir nunca baja de `PHRASE_CATCHUP_FLOOR_MS=2000` (`max(floor, dwell×CATCHUP_FACTOR=0.6)`). `PHRASE_MIN_MS` 1100→1400 para fragmentos cortos.
+
+**Problemas abiertos (próxima sesión):**
+1. **Calibración fina del dwell con uso prolongado** contra la tabla de abajo (`PHRASE_*`, `CATCHUP_THRESHOLD`, `CATCHUP_FACTOR`, `PHRASE_CATCHUP_FLOOR_MS`). Base validada en gafas; afinar solo si el atraso acumulado molesta con monólogos largos.
 
 **Tabla de tiempos de lectura objetivo (referencia del usuario, 2026-06-22):**
 
